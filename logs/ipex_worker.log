@@ -1,0 +1,8 @@
+2026-03-09 18:50:44,759 [IPEX-Worker] INFO: XPU found: Intel(R) Arc(TM) Graphics
+2026-03-09 18:50:44,767 [IPEX-Worker] INFO: IPEX Worker listening -> 127.0.0.1:62000
+2026-03-09 18:50:44,767 [IPEX-Worker] INFO: Python: 3.11.14 | XPU: OK
+2026-03-09 18:50:46,070 [IPEX-Worker] INFO: Command: ping
+2026-03-09 18:50:46,074 [IPEX-Worker] INFO: Command: ping
+2026-03-09 18:50:46,074 [IPEX-Worker] INFO: Command: status
+2026-03-09 18:50:52,484 [IPEX-Worker] INFO: Command: ping
+2026-03-09 18:50:52,488 [IPEX-Worker] INFO: Command: status

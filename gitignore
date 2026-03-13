@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs ve database
+logs/
+*.db
+*.log
+
+# Model dosyalari (cok buyuk)
+*.gguf
+*.bin
+*.xml
+*.pt
+*.safetensors
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Windows
+Thumbs.db
+desktop.ini
+*.lnk
+
+# Gecici
+*.tmp
+*.temp
+{core,ui,modules,logs,config}
