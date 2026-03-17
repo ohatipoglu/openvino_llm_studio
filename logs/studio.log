@@ -1829,3 +1829,205 @@ AttributeError: module 'llama_cpp' has no attribute 'Llama'
 2026-03-13 11:18:12,722 [INFO] core.orchestrator: Backend değiştirildi: openvino
 2026-03-13 11:18:17,040 [INFO] modules.model_manager: 1 OpenVINO modeli bulundu.
 2026-03-13 11:18:20,705 [INFO] core.orchestrator: Backend değiştirildi: ollama
+2026-03-13 16:56:00,395 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-13 16:56:00,426 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-13 16:56:00,438 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-13 16:56:00,438 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-13 16:56:09,796 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-13 16:56:09,796 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-13 16:56:29,479 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-13 16:56:35,672 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-13 16:56:35,704 [INFO] core.orchestrator: Orchestrator hazır. Session: 2aa41d70
+2026-03-13 16:56:35,704 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-13 16:56:39,996 [INFO] modules.model_manager: 1 OpenVINO modeli bulundu.
+2026-03-13 16:56:40,295 [INFO] modules.model_manager: 1 OpenVINO modeli bulundu.
+2026-03-13 16:56:43,370 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaCppBackend hazır (aynı süreç).
+2026-03-13 16:56:46,110 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 16:56:53,959 [INFO] core.orchestrator: Backend değiştirildi: ipex
+2026-03-13 16:56:58,181 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 17:04:05,513 [INFO] core.orchestrator: Backend değiştirildi: ollama
+2026-03-13 17:04:31,619 [INFO] modules.dspy_enricher: DSPy direkt LLM modu aktif: gemma:latest
+2026-03-13 17:05:50,467 [WARNING] modules.dspy_enricher: LLM classify 15s'de tamamlanamadı, rule_fallback kullanılıyor.
+2026-03-13 17:05:51,935 [INFO] modules.dspy_enricher: Fallback LLM mod: '('Summarize' → 'Summarize'
+2026-03-13 17:05:54,036 [INFO] core.orchestrator: generate() çağrılıyor — backend=ollama, prompt_len=126, params={'temperature': 0.7, 'max_tokens': 512, 'top_p': 0.9, 'top_k': 50, 'repetition_penalty': 1.1}
+2026-03-13 17:06:12,329 [INFO] core.orchestrator: generate() tamamlandı — metrics={'duration_ms': 18268.6, 'input_tokens': 58, 'output_tokens': 181, 'tokens_per_second': 9.91}
+2026-03-13 17:06:59,539 [INFO] modules.dspy_enricher: DSPy direkt LLM modu aktif: phi4:14b
+2026-03-13 17:07:28,502 [WARNING] modules.dspy_enricher: LLM classify 15s'de tamamlanamadı, rule_fallback kullanılıyor.
+2026-03-13 17:07:35,291 [INFO] modules.dspy_enricher: Fallback LLM mod: '('ChainOfThought' → 'ChainOfThought'
+2026-03-13 17:07:37,345 [INFO] core.orchestrator: generate() çağrılıyor — backend=ollama, prompt_len=126, params={'temperature': 0.7, 'max_tokens': 512, 'top_p': 0.9, 'top_k': 50, 'repetition_penalty': 1.1}
+2026-03-13 17:08:52,175 [INFO] core.orchestrator: generate() tamamlandı — metrics={'duration_ms': 74810.9, 'input_tokens': 67, 'output_tokens': 512, 'tokens_per_second': 6.84}
+2026-03-13 17:09:09,463 [INFO] core.orchestrator: Backend değiştirildi: ipex
+2026-03-13 17:09:13,680 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 17:09:27,679 [INFO] modules.ipex_backend: LlamaServerBackend: başlatılıyor → Qwen3.5-27B-Q4_K_S.gguf
+2026-03-13 17:10:05,542 [INFO] modules.ipex_backend: LlamaServerBackend: hazır (37.8s) — Qwen3.5-27B-Q4_K_S
+2026-03-13 17:10:05,585 [INFO] modules.dspy_enricher: DSPy direkt LLM modu aktif: C:\OpenVINO_LLM\gguf\Qwen3.5-27B-Q4_K_S.gguf
+2026-03-13 17:10:55,946 [WARNING] modules.dspy_enricher: LLM classify 15s'de tamamlanamadı, rule_fallback kullanılıyor.
+2026-03-13 17:11:01,282 [WARNING] modules.dspy_enricher: LLM classify yanıtı uygunsuz ('('\n\n<think>\nThinking Process:\n\n1', {'elapsed_s': 20.3, '), rule_fallback kullanılıyor.
+2026-03-13 17:11:01,306 [INFO] core.orchestrator: generate() çağrılıyor — backend=ipex, prompt_len=126, params={'temperature': 0.7, 'max_tokens': 1600, 'top_p': 0.9, 'top_k': 50, 'repetition_penalty': 1.1}
+2026-03-13 17:21:01,389 [ERROR] modules.ipex_backend: LlamaServerBackend generate hatası: HTTPConnectionPool(host='127.0.0.1', port=8080): Read timed out. (read timeout=600)
+Traceback (most recent call last):
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\connection.py", line 571, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\http\client.py", line 1395, in getresponse
+    response.begin()
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\http\client.py", line 325, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\http\client.py", line 286, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\socket.py", line 718, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\requests\adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\util\retry.py", line 490, in increment
+    raise reraise(type(error), error, _stacktrace)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\util\util.py", line 39, in reraise
+    raise value
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\connectionpool.py", line 536, in _make_request
+    self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\urllib3\connectionpool.py", line 367, in _raise_timeout
+    raise ReadTimeoutError(
+urllib3.exceptions.ReadTimeoutError: HTTPConnectionPool(host='127.0.0.1', port=8080): Read timed out. (read timeout=600)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\OpenVINO_LLM\openvino_llm_studio\openvino_llm_studio\modules\ipex_backend.py", line 1107, in generate
+    resp = requests.post(
+           ^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\requests\api.py", line 115, in post
+    return request("post", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\requests\api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\requests\sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\requests\sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\envs\openvino_studio\Lib\site-packages\requests\adapters.py", line 690, in send
+    raise ReadTimeout(e, request=request)
+requests.exceptions.ReadTimeout: HTTPConnectionPool(host='127.0.0.1', port=8080): Read timed out. (read timeout=600)
+2026-03-13 17:21:01,480 [INFO] core.orchestrator: generate() tamamlandı — metrics={'error': "HTTPConnectionPool(host='127.0.0.1', port=8080): Read timed out. (read timeout=600)"}
+2026-03-13 17:21:01,485 [ERROR] core.orchestrator: Generate metrics error: HTTPConnectionPool(host='127.0.0.1', port=8080): Read timed out. (read timeout=600)
+2026-03-13 21:40:11,116 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-13 21:40:11,147 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-13 21:40:11,148 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-13 21:40:11,148 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-13 21:40:20,942 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-13 21:40:20,942 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-13 21:40:25,435 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-13 21:40:29,605 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-13 21:40:29,621 [INFO] core.orchestrator: Orchestrator hazır. Session: 549f90e6
+2026-03-13 21:40:29,621 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-13 21:40:33,938 [INFO] modules.model_manager: 1 OpenVINO modeli bulundu.
+2026-03-13 21:40:34,174 [INFO] modules.model_manager: 1 OpenVINO modeli bulundu.
+2026-03-13 21:40:40,004 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 21:41:40,530 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 21:41:55,008 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 21:43:20,671 [INFO] modules.model_manager: 1 OpenVINO modeli bulundu.
+2026-03-13 23:17:37,510 [INFO] core.orchestrator: Backend değiştirildi: ipex
+2026-03-13 23:17:41,872 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-13 23:19:39,468 [INFO] core.orchestrator: Backend değiştirildi: openvino
+2026-03-13 23:19:43,741 [INFO] modules.model_manager: 2 OpenVINO modeli bulundu.
+2026-03-13 23:20:05,514 [INFO] modules.model_manager: Model yükleniyor: C:\OpenVINO_LLM\OpenVINO--gpt-oss-20b-int4-ov [AUTO] config={'GPU_MAX_ALLOC_PERCENT': '75', 'KV_CACHE_PRECISION': 'u8', 'NUM_STREAMS': '1', 'PERFORMANCE_HINT': 'LATENCY', 'CACHE_DIR': 'C:\\OpenVINO_LLM\\.cache'}
+2026-03-17 11:19:59,342 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-17 11:19:59,378 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-17 11:19:59,378 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-17 11:19:59,378 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-17 11:20:08,792 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-17 11:20:08,792 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-17 11:20:12,024 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-17 11:20:15,948 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-17 11:20:15,960 [INFO] core.orchestrator: Orchestrator hazır. Session: ecf037f7
+2026-03-17 11:20:15,960 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-17 11:20:19,799 [INFO] modules.model_manager: 2 OpenVINO modeli bulundu.
+2026-03-17 11:20:20,039 [INFO] modules.model_manager: 2 OpenVINO modeli bulundu.
+2026-03-17 11:20:26,009 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-17 11:20:34,543 [INFO] modules.model_manager: 2 OpenVINO modeli bulundu.
+2026-03-17 11:21:14,643 [INFO] core.orchestrator: Backend değiştirildi: ipex
+2026-03-17 11:21:18,864 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-17 11:21:34,650 [INFO] modules.ipex_backend: LlamaServerBackend: başlatılıyor → Phi-3.5-mini-instruct.Q4_K_M.gguf
+2026-03-17 11:22:12,939 [INFO] modules.ipex_backend: LlamaServerBackend: hazır (38.2s) — Phi-3.5-mini-instruct.Q4_K_M
+2026-03-17 11:22:12,974 [INFO] modules.dspy_enricher: DSPy direkt LLM modu aktif: C:\OpenVINO_LLM\gguf\Phi-3.5-mini-instruct.Q4_K_M.gguf
+2026-03-17 11:31:50,778 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-17 11:31:50,792 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-17 11:31:50,803 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-17 11:31:50,804 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-17 11:31:58,355 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-17 11:31:58,355 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-17 11:32:01,322 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-17 11:32:05,003 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-17 11:32:05,024 [INFO] core.orchestrator: Orchestrator hazır. Session: bcf6e714
+2026-03-17 11:32:05,025 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-17 11:32:48,059 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-17 11:32:48,090 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-17 11:32:48,090 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-17 11:32:48,090 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-17 11:32:55,255 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-17 11:32:55,268 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-17 11:32:58,236 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-17 11:33:01,675 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-17 11:33:01,706 [INFO] core.orchestrator: Orchestrator hazır. Session: b4ec3ae2
+2026-03-17 11:33:01,706 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-17 12:08:21,990 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-17 12:08:22,004 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-17 12:08:22,018 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-17 12:08:22,018 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-17 12:08:28,764 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-17 12:08:28,764 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-17 12:08:32,058 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-17 12:08:35,858 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-17 12:08:35,878 [INFO] core.orchestrator: Orchestrator hazır. Session: 31a4c50b
+2026-03-17 12:08:35,878 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-17 12:15:11,520 [INFO] core.orchestrator: Orchestrator başlatılıyor...
+2026-03-17 12:15:11,544 [INFO] modules.database: DatabaseManager başlatıldı: logs\studio.db
+2026-03-17 12:15:11,551 [INFO] modules.ipex_backend: llama-cpp-python mevcut.
+2026-03-17 12:15:11,551 [INFO] modules.ipex_worker_client: IPEXWorkerClient: LlamaServerBackend (llama-server.exe) aktif.
+2026-03-17 12:15:19,170 [INFO] sentence_transformers.SentenceTransformer: Use pytorch device_name: cpu
+2026-03-17 12:15:19,170 [INFO] sentence_transformers.SentenceTransformer: Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-03-17 12:15:22,103 [INFO] modules.search_engine: Semantik sıralama aktif (all-MiniLM-L6-v2)
+2026-03-17 12:15:25,742 [INFO] modules.dspy_enricher: DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.
+2026-03-17 12:15:25,758 [INFO] core.orchestrator: Orchestrator hazır. Session: 9aaa351d
+2026-03-17 12:15:25,758 [INFO] __main__: OpenVINO LLM Studio başlatılıyor...
+2026-03-17 12:15:26,040 [INFO] __main__: Gradio server: 127.0.0.1:7861
+2026-03-17 12:15:29,692 [INFO] modules.model_manager: 2 OpenVINO modeli bulundu.
+2026-03-17 12:15:30,015 [INFO] modules.model_manager: 2 OpenVINO modeli bulundu.
+2026-03-17 12:15:37,753 [WARNING] modules.ipex_backend: Ollama model listesi alınamadı: HTTPConnectionPool(host='localhost', port=11434): Max retries exceeded with url: /api/tags (Caused by NewConnectionError("HTTPConnection(host='localhost', port=11434): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it"))
+2026-03-17 12:15:37,997 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-17 12:23:38,719 [INFO] core.orchestrator: Backend değiştirildi: ipex
+2026-03-17 12:23:42,953 [INFO] modules.ipex_backend: 6 GGUF model bulundu.
+2026-03-17 12:24:02,300 [INFO] modules.ipex_backend: LlamaServerBackend: başlatılıyor → Qwen3-1.7B.Q4_K_M.gguf
+2026-03-17 12:24:07,363 [INFO] modules.ipex_backend: LlamaServerBackend: hazır (5.1s) — Qwen3-1.7B.Q4_K_M
+2026-03-17 12:24:07,411 [INFO] modules.dspy_enricher: DSPy direkt LLM modu aktif: C:\OpenVINO_LLM\gguf\Qwen3-1.7B.Q4_K_M.gguf [CPU]
+2026-03-17 12:24:20,215 [INFO] primp: response: https://www.bing.com/search?q=yapay+zeka+nedir 200
+2026-03-17 12:24:21,265 [INFO] primp: response: https://www.bing.com/search?q=yapay+zeka+nedir&first=11&FORM=PERE 200
+2026-03-17 12:24:22,354 [INFO] primp: response: https://www.bing.com/search?q=yapay+zeka+nedir&first=21&FORM=PERE1 200
+2026-03-17 12:24:23,508 [INFO] primp: response: https://www.bing.com/search?q=yapay+zeka+nedir&first=31&FORM=PERE2 200
+2026-03-17 12:24:24,517 [INFO] primp: response: https://www.bing.com/search?q=yapay+zeka+nedir&first=41&FORM=PERE3 200
+2026-03-17 12:24:24,588 [INFO] modules.search_engine: DuckDuckGo: 5 sonuç (yapay zeka nedir)
+2026-03-17 12:24:27,681 [INFO] modules.dspy_enricher: Fallback LLM mod seçildi: 'ChainOfThought'
+2026-03-17 12:24:27,697 [INFO] core.orchestrator: generate() çağrılıyor — backend=ipex, prompt_len=1489, params={'temperature': 0.7, 'max_tokens': 512, 'top_p': 0.9, 'top_k': 50, 'repetition_penalty': 1.1}
+2026-03-17 12:24:48,321 [INFO] modules.ipex_backend: LlamaServerBackend: 474 token, 23.0 t/s, 20.61s
+2026-03-17 12:24:48,321 [INFO] core.orchestrator: generate() tamamlandı — metrics={'backend': 'llama-server', 'device': 'SYCL0', 'model': 'Qwen3-1.7B.Q4_K_M', 'elapsed_s': 20.61, 'tokens_per_second': 23.0, 'prompt_tokens': 554, 'completion_tokens': 474}
