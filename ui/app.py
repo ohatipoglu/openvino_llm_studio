@@ -1,3 +1,5 @@
+import os
+import socket
 """
 ui/app.py
 Gradio tabanlı ana kullanıcı arayüzü.
@@ -882,9 +884,41 @@ if __name__ == "__main__":
     (ROOT / "logs").mkdir(exist_ok=True)
 
     demo = build_ui()
+
+    def _is_port_free(host: str, port: int) -> bool:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+    host = os.getenv("GRADIO_SERVER_NAME", "127.0.0.1")
+    env_port = os.getenv("GRADIO_SERVER_PORT")
+    if env_port:
+        try:
+            preferred = int(env_port)
+        except ValueError:
+            preferred = 7860
+        candidates = [preferred]
+    else:
+        candidates = list(range(7860, 7871))
+
+    server_port = None
+    for p in candidates:
+        if _is_port_free(host, p):
+            server_port = p
+            break
+
+    if server_port is None:
+        # Son çare: Gradio'nun kendi seçim mekanizmasına bırak
+        server_port = 7860
+
+    logger.info(f"Gradio server: {host}:{server_port}")
     demo.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
+        server_name=host,
+        server_port=server_port,
         show_error=True,
         inbrowser=True,
         share=False,
