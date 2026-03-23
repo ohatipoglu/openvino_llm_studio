@@ -142,20 +142,22 @@ class Orchestrator:
 
     def get_model_choices(self) -> list[str]:
         models = self.scan_models()
-        if not models:
-            return []
 
         if self._active_backend == "openvino":
+            if not models:
+                return []
             return [f"{m.name} [{m.model_type.upper()}] ({m.size_mb:.0f} MB)"
                     for m in models]
 
         elif self._active_backend == "ollama":
+            if not models:
+                return []
             return [f"{m.model_id} ({m.size_gb:.1f} GB)" for m in models]
 
         elif self._active_backend == "ipex":
             if not models:
                 return ["⚠️ GGUF model yok — Model Galerisi'nden indirin"]
-            return [f"{m.name}  ({m.size_gb} GB)  —  {m.model_id}" for m in models]
+            return [f"{m.name}  ({m.size_gb:.1f} GB)  —  {m.model_id}" for m in models]
 
         return []
 

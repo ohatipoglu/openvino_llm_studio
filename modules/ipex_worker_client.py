@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from modules.ipex_backend import LlamaCppBackend, LlamaServerBackend
+from core.config import LLAMA_SERVER_EXE
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class IPEXWorkerClient:
     """
 
     # llama-server varsayılan ayarları
-    LLAMA_SERVER_EXE  = r"C:\OpenVINO_LLM\llama-server\llama-server.exe"
+    LLAMA_SERVER_EXE  = str(LLAMA_SERVER_EXE)
     LLAMA_SERVER_HOST = "127.0.0.1"
     LLAMA_SERVER_PORT = 8080
 
@@ -220,7 +221,7 @@ class IPEXWorkerClient:
     # ─────────────────────── Durum & Bellek ─────────────────────
 
     def get_status(self) -> dict:
-        mem = psutil.virtual_memory() if _psutil_ok() else {}
+        mem = _psutil_vm() if _psutil_ok() else None
         info = {
             "loaded":        self._backend.is_loaded,
             "model_id":      self._backend._loaded_id or "",
@@ -229,9 +230,8 @@ class IPEXWorkerClient:
             "xpu_available": self._backend.check_sycl_support(),
             "backend":       "llamacpp",
         }
-        if mem:
-            import psutil as ps
-            m = ps.virtual_memory()
+        if mem is not None:
+            m = mem
             info.update({
                 "ram_total_gb": round(m.total    / 1024**3, 1),
                 "ram_used_gb":  round(m.used     / 1024**3, 1),
@@ -249,7 +249,12 @@ class IPEXWorkerClient:
 
 def _psutil_ok() -> bool:
     try:
-        import psutil  # noqa
+        import psutil  # noqa: F401
         return True
     except ImportError:
         return False
+
+
+def _psutil_vm():
+    import psutil
+    return psutil.virtual_memory()

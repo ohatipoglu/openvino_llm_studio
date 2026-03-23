@@ -25,24 +25,37 @@ sys.path.insert(0, str(ROOT))
 
 import gradio as gr
 from core.orchestrator import Orchestrator
+from core.config import OPENVINO_LLM_HOME, CACHE_DIR, GGUF_DIR, LOG_DIR
+
+# logging.FileHandler açılmadan önce logs/ dizini mevcut olmalı (import-time crash önleme)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(ROOT / "logs" / "studio.log", encoding="utf-8"),
+        logging.FileHandler(LOG_DIR / "studio.log", encoding="utf-8"),
     ]
 )
 logger = logging.getLogger(__name__)
 
 _orch_lock = threading.Lock()
-orch = Orchestrator()
+_orch = None
+
+
+def _get_orch() -> Orchestrator:
+    global _orch
+    with _orch_lock:
+        if _orch is None:
+            _orch = Orchestrator()
+        return _orch
 
 
 # ===================== HELPER FUNCTIONS =====================
 
 def refresh_models():
+    orch = _get_orch()
     choices = orch.get_model_choices()
     if choices:
         return gr.update(choices=choices, value=choices[0]), f"✅ {len(choices)} model bulundu."
@@ -51,6 +64,7 @@ def refresh_models():
 
 def load_model_action(model_choice, device,
                        gpu_max_alloc, kv_cache_prec, num_streams, perf_hint, cache_dir):
+    orch = _get_orch()
     if not model_choice:
         return "❌ Model seçilmedi.", gr.update(interactive=False)
 
@@ -89,6 +103,7 @@ def run_inference(
     repetition_penalty,
     history
 ):
+    orch = _get_orch()
     if not prompt.strip():
         yield history, "⚠️ Prompt boş olamaz."
         return
@@ -125,6 +140,7 @@ def run_inference(
 
 
 def get_logs_display(log_type, session_only):
+    orch = _get_orch()
     logs = orch.get_logs(session_only=session_only)
 
     if log_type == "Ham JSON":
@@ -215,6 +231,7 @@ def get_logs_display(log_type, session_only):
 
 
 def clear_logs_action(table_choice):
+    orch = _get_orch()
     table_map = {
         "Tümü": "all", "Arama": "search", "DSPy": "dspy",
         "LLM": "llm", "Hata": "errors", "Genel": "general",
@@ -224,6 +241,7 @@ def clear_logs_action(table_choice):
 
 
 def get_stats_display():
+    orch = _get_orch()
     stats          = orch.get_stats()
     backend_status = stats.get("backend_status", {})
     lines = [
@@ -252,6 +270,7 @@ def get_stats_display():
 
 
 def new_session_action():
+    orch = _get_orch()
     orch.new_session()
     return [], f"🔄 Yeni session: {orch.session_id}"
 
@@ -289,6 +308,7 @@ def _entries_to_table_ollama(entries):
 # ===================== KATALOG YENİLEME (ZAMAN AŞIMLI) =====================
 
 def refresh_ov_catalog(search, force=False):
+    orch = _get_orch()
     yield [], gr.update(choices=[], value=None), "⏳ HuggingFace'den OpenVINO modelleri çekiliyor..."
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(orch.get_openvino_catalog, search.strip(), force)
@@ -305,6 +325,7 @@ def refresh_ov_catalog(search, force=False):
 
 
 def refresh_ollama_catalog(search, force=False):
+    orch = _get_orch()
     yield [], gr.update(choices=[], value=None), "⏳ Ollama kataloğu yükleniyor..."
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(orch.get_ollama_catalog, search.strip(), force)
@@ -321,6 +342,7 @@ def refresh_ollama_catalog(search, force=False):
 
 
 def refresh_gguf_catalog(search, force=False):
+    orch = _get_orch()
     yield [], gr.update(choices=[], value=None), "⏳ GGUF model kataloğu yükleniyor..."
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(orch.get_ipex_catalog, search.strip(), force)
@@ -339,6 +361,7 @@ def refresh_gguf_catalog(search, force=False):
 # ===================== DİĞER YARDIMCI FONKSİYONLAR =====================
 
 def pull_ollama(model_id):
+    orch = _get_orch()
     if not model_id.strip():
         return "⚠️ Model ID boş olamaz."
     success, msg = orch.pull_ollama_model(model_id.strip())
@@ -347,6 +370,7 @@ def pull_ollama(model_id):
 
 def check_llamacpp():
     """llama-cpp-python kurulumunu kontrol et ve durum raporla."""
+    orch = _get_orch()
     ok, msg = orch.ipex.start_worker()
     status  = orch.get_backend_status()
     lines   = [f"{b.upper()}: {v}" for b, v in status.items()]
@@ -355,6 +379,7 @@ def check_llamacpp():
 
 def unload_llamacpp():
     """Yüklü GGUF modelini bellekten çıkar."""
+    orch = _get_orch()
     ok, msg = orch.ipex.stop_worker()
     status  = orch.get_backend_status()
     lines   = [f"{b.upper()}: {v}" for b, v in status.items()]
@@ -362,6 +387,7 @@ def unload_llamacpp():
 
 
 def on_backend_change(backend):
+    orch = _get_orch()
     orch.set_backend(backend)
     status  = orch.get_backend_status()
     lines   = [f"{b.upper()}: {v}" for b, v in status.items()]
@@ -371,6 +397,7 @@ def on_backend_change(backend):
 
 
 def dl_ov_catalog(selected, dest_dir):
+    orch = _get_orch()
     if not selected:
         return "⚠️ Model seçilmedi."
     model_id = selected.split("  (")[0].strip()
@@ -380,17 +407,19 @@ def dl_ov_catalog(selected, dest_dir):
 
 
 def load_ov_catalog(selected, device):
+    orch = _get_orch()
     if not selected:
         return "⚠️ Model seçilmedi."
     model_id   = selected.split("  (")[0].strip()
     local_name = model_id.replace("/", "--")
-    dest       = os.path.join(r"C:\OpenVINO_LLM", local_name)
+    dest       = str(OPENVINO_LLM_HOME / local_name)
     orch.set_backend("openvino")
     success, msg = orch.load_model(dest, device)
     return f"✅ {msg}" if success else f"❌ {msg}"
 
 
 def pull_ollama_catalog(selected):
+    orch = _get_orch()
     if not selected:
         return "⚠️ Model seçilmedi."
     model_id = selected.split("  (")[0].strip()
@@ -400,6 +429,7 @@ def pull_ollama_catalog(selected):
 
 
 def load_ollama_catalog(selected):
+    orch = _get_orch()
     if not selected:
         return "⚠️ Model seçilmedi."
     model_id = selected.split("  (")[0].strip()
@@ -415,6 +445,7 @@ def dl_gguf_catalog(selected, gguf_quant, dest_dir):
     gguf_quant:  "Q4_K_M", "Q4_K_S", "Q5_K_M", "Q8_0", "otomatik"
     dest_dir:    hedef dizin
     """
+    orch = _get_orch()
     if not selected:
         return "⚠️ Model seçilmedi."
     model_id = selected.split("  (")[0].strip()
@@ -433,6 +464,7 @@ def dl_gguf_catalog(selected, gguf_quant, dest_dir):
 
 def load_gguf_catalog(selected, device, gguf_n_ctx, gguf_force_cpu):
     """Yerel .gguf dosyasını seçip yükle."""
+    orch = _get_orch()
     if not selected:
         return "⚠️ Model seçilmedi."
     model_id = selected.split("  (")[0].strip()
@@ -468,6 +500,7 @@ def load_gguf_catalog(selected, device, gguf_n_ctx, gguf_force_cpu):
 
 
 def _initial_load():
+    orch = _get_orch()
     ov_e = orch.get_openvino_catalog()
     ov_r, ov_d = _entries_to_table_ov(ov_e)
 
@@ -580,7 +613,7 @@ def build_ui():
                             )
                             cache_dir = gr.Textbox(
                                 label="OpenVINO Cache Dizini",
-                                value=r"C:\OpenVINO_LLM\.cache",
+                                value=str(CACHE_DIR),
                                 info="Compiled kernel cache. Boş bırakırsan cache kapalı."
                             )
                         load_btn    = gr.Button("⚡ Modeli Yükle", variant="primary")
@@ -695,7 +728,7 @@ def build_ui():
                         with gr.Row():
                             ov_search    = gr.Textbox(label="🔎 Ara", placeholder="qwen, mistral...", scale=3)
                             ov_refresh_btn = gr.Button("🔄 HF'den Yenile", scale=1)
-                            ov_dest_dir  = gr.Textbox(label="İndirme Dizini", value=r"C:\OpenVINO_LLM", scale=2)
+                            ov_dest_dir  = gr.Textbox(label="İndirme Dizini", value=str(OPENVINO_LLM_HOME), scale=2)
 
                         ov_catalog_table = gr.Dataframe(
                             headers=["Model Adı", "HF Model ID", "Boyut", "Context", "İndirme", "Etiketler"],
@@ -751,7 +784,7 @@ def build_ui():
                             )
                             gguf_dest_dir = gr.Textbox(
                                 label="İndirme Dizini",
-                                value=r"C:\OpenVINO_LLM\gguf", scale=2
+                                value=str(GGUF_DIR), scale=2
                             )
 
                         gguf_catalog_table = gr.Dataframe(
@@ -881,7 +914,7 @@ def build_ui():
 
 if __name__ == "__main__":
     logger.info("OpenVINO LLM Studio başlatılıyor...")
-    (ROOT / "logs").mkdir(exist_ok=True)
+    LOG_DIR.mkdir(exist_ok=True)
 
     demo = build_ui()
 

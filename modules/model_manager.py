@@ -18,7 +18,9 @@ import psutil
 
 logger = logging.getLogger(__name__)
 
-OPENVINO_ROOT = Path(r"C:\OpenVINO_LLM")
+from core.config import OPENVINO_MODELS_DIR, CACHE_DIR
+
+OPENVINO_ROOT = OPENVINO_MODELS_DIR
 
 # Model tipi tespiti için imzalar
 MODEL_TYPE_SIGNATURES = {
@@ -204,6 +206,7 @@ class ModelLoader:
         self.db = db_manager
         self._loaded_model = None
         self._loaded_path = None
+        self._tokenizer = None
         self._lock = threading.Lock()
 
     def load(self, model_path: str, device: str = "CPU",
@@ -257,6 +260,15 @@ class ModelLoader:
                     self._loaded_path  = model_path
                     self._active_device = device
                     self._active_ov_config = cfg
+
+                    # Token sayımı için tokenizer yükle (varsa)
+                    try:
+                        from transformers import AutoTokenizer
+                        self._tokenizer = AutoTokenizer.from_pretrained(
+                            model_path, local_files_only=True, trust_remote_code=False
+                        )
+                    except Exception:
+                        self._tokenizer = None
 
                     mem_after = psutil.virtual_memory()
                     used_gb   = (mem.available - mem_after.available) / (1024 ** 3)
@@ -316,7 +328,7 @@ class ModelLoader:
                 # 32 GB × 0.75 = 24 GB max → dxgmms2.sys crash önlenir
                 "GPU_MAX_ALLOC_PERCENT": "75",
                 # Compiled kernel cache → yeniden yüklemede hızlı
-                "CACHE_DIR": str(Path(r"C:\OpenVINO_LLM\.cache")),
+                "CACHE_DIR": str(CACHE_DIR),
                 # Tek stream → büyük modelde bellek tasarrufu
                 "NUM_STREAMS": "1",
                 # Latency modu → single-batch, düşük overhead
@@ -334,7 +346,7 @@ class ModelLoader:
                 "INFERENCE_NUM_THREADS": str(threads),
                 "CPU_BIND_THREAD": "YES",
                 # Compiled model cache
-                "CACHE_DIR": str(Path(r"C:\OpenVINO_LLM\.cache")),
+                "CACHE_DIR": str(CACHE_DIR),
                 "PERFORMANCE_HINT": "LATENCY",
                 "NUM_STREAMS": "1",
             }
@@ -360,6 +372,7 @@ class ModelLoader:
             )
             self._loaded_model = (model, tokenizer)
             self._loaded_path = model_path
+            self._tokenizer = tokenizer
             return True, f"Model yüklendi (optimum): {Path(model_path).name}"
         except Exception as e:
             msg = f"optimum-intel yükleme hatası: {str(e)}"
@@ -375,6 +388,7 @@ class ModelLoader:
                 del self._loaded_model
                 self._loaded_model = None
                 self._loaded_path = None
+                self._tokenizer = None
                 gc.collect()
                 logger.info("Önceki model bellekten temizlendi.")
             except Exception as e:
@@ -440,8 +454,8 @@ class ModelLoader:
                 response_text = self._clean_response(str(response), formatted_prompt, prompt)
 
                 elapsed_ms = (time.time() - start) * 1000
-                input_tokens = len(formatted_prompt.split())
-                output_tokens = len(response_text.split())
+                input_tokens = self._count_tokens(formatted_prompt)
+                output_tokens = self._count_tokens(response_text)
                 tps = output_tokens / max(elapsed_ms / 1000, 0.001)
 
                 metrics = {
@@ -475,6 +489,16 @@ class ModelLoader:
                 if self.db:
                     self.db.log_error(session_id, "ModelLoader.generate", e)
                 return f"[HATA] {str(e)}", {"error": str(e)}
+
+    def _count_tokens(self, text: str) -> int:
+        """Token sayısını ölç. Tokenizer yoksa karakter tabanlı tahmin kullan."""
+        if self._tokenizer is not None:
+            try:
+                return len(self._tokenizer.encode(text, add_special_tokens=False))
+            except Exception:
+                pass
+        # Fallback: ortalama ~4 karakter/token (GPT-style tokenizer tahmini)
+        return max(1, len(text) // 4)
 
     def _apply_chat_template(self, prompt: str, system_prompt: str, model_name: str) -> str:
         """

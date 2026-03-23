@@ -142,19 +142,24 @@ class DSPyEnricher:
                 # "cooldown" uygulayıp aynı anda çok sayıda classify işinin birikmesini
                 # engelliyoruz.
                 import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    future = ex.submit(self._fallback_llm_classify, prompt, steps)
-                    try:
-                        return future.result(timeout=self._CLASSIFY_TIMEOUT_S)
-                    except concurrent.futures.TimeoutError:
-                        logger.warning(
-                            f"LLM classify {self._CLASSIFY_TIMEOUT_S}s'de tamamlanamadı, "
-                            "rule_fallback kullanılıyor."
-                        )
-                        steps.append({"action": "classify_timeout"})
-                        self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
-                        future.cancel()
-                        return self._rule_fallback(prompt, steps)
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(self._fallback_llm_classify, prompt, steps)
+                try:
+                    result = future.result(timeout=self._CLASSIFY_TIMEOUT_S)
+                    executor.shutdown(wait=False)
+                    return result
+                except concurrent.futures.TimeoutError:
+                    logger.warning(
+                        f"LLM classify {self._CLASSIFY_TIMEOUT_S}s'de tamamlanamadı, "
+                        "rule_fallback kullanılıyor."
+                    )
+                    steps.append({"action": "classify_timeout"})
+                    self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
+                    # wait=False: ana thread bloklanmaz; arka plan thread'i kendi
+                    # başına tamamlanır. cancel_futures yalnızca bekleyen işleri iptal
+                    # eder — halihazırda çalışan thread durdurulamaz (Python sınırı).
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return self._rule_fallback(prompt, steps)
 
         # DSPy predictor hazırsa dene (gelecekte daha yetenekli modeller için)
         if self._dspy_available and self._mode_predictor and self._mode_predictor != "direct":

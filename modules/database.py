@@ -17,8 +17,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("logs/studio.db")
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+from core.config import DB_PATH, LOG_DIR
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Base(DeclarativeBase):

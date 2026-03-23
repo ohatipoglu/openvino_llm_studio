@@ -42,6 +42,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+from core.config import GGUF_DIR, OPENVINO_LLM_HOME, LLAMA_SERVER_EXE
 
 # ─────────────────────────────────────────
 # Veri sınıfları
@@ -322,9 +323,11 @@ class LlamaCppBackend:
     """
 
     # GGUF model arama yolları
+    # Not: OPENVINO_LLM_HOME (C:\OpenVINO_LLM) kasıtlı olarak çıkarıldı.
+    # O dizinin tamamını rglob ile taramak yavaş ve gereksiz; .gguf dosyaları
+    # GGUF_DIR (C:\OpenVINO_LLM\gguf) altına konulmalıdır.
     SEARCH_PATHS = [
-        Path(r"C:\OpenVINO_LLM\gguf"),
-        Path(r"C:\OpenVINO_LLM"),
+        GGUF_DIR,
         Path.home() / ".cache" / "huggingface" / "hub",
     ]
 
@@ -431,17 +434,24 @@ class LlamaCppBackend:
         for search_dir in self.SEARCH_PATHS:
             if not search_dir.exists():
                 continue
-            for gguf_file in search_dir.rglob("*.gguf"):
+            try:
+                gguf_files = list(search_dir.rglob("*.gguf"))
+            except OSError as e:
+                logger.warning(f"GGUF tarama hatası ({search_dir}): {e}")
+                continue
+            for gguf_file in gguf_files:
                 path_str = str(gguf_file)
                 if path_str in seen:
                     continue
                 seen.add(path_str)
 
-                size_gb = round(gguf_file.stat().st_size / 1024**3, 1)
-                name    = gguf_file.stem  # dosya adı, uzantısız
+                try:
+                    size_gb = round(gguf_file.stat().st_size / 1024**3, 1)
+                except OSError:
+                    size_gb = 0.0
 
-                # Bağlam uzunluğunu dosya adından tahmin et
-                ctx = self._guess_context(name)
+                name = gguf_file.stem  # dosya adı, uzantısız
+                ctx  = self._guess_context(name)
 
                 found.append(IPEXModelInfo(
                     name=f"[GGUF] {name}",
@@ -910,7 +920,7 @@ class LlamaServerBackend:
 
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 8080
-    DEFAULT_EXE  = r"C:\OpenVINO_LLM\llama-server\llama-server.exe"
+    DEFAULT_EXE  = str(LLAMA_SERVER_EXE)
 
     def __init__(self, db_manager=None):
         self.db          = db_manager
