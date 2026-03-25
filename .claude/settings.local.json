@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(git:*)",
+      "Bash(rm -f ipex_worker_orig_20260317.py main_orig_20260317.py ui/app_orig_20260317.py modules/dspy_enricher_orj.py ui/app_orj.py)",
+      "Bash(rm -rf \"{core,ui,modules,logs,config}\")",
+      "Bash(cp gitignore:*)",
+      "Bash(rm gitignore:*)"
+    ]
+  }
+}

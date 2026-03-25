@@ -720,6 +720,7 @@ class LlamaCppBackend:
                         top_p=top_p,
                         top_k=top_k,
                         repeat_penalty=repeat_pen,
+                        stop=["<|im_end|>", "<|end|>", "<|eot_id|>", "<|endoftext|>", "</s>", "\nUser:", "\nHuman:"],
                     )
                     content = result["choices"][0]["message"].get("content") or ""
                     # gpt-oss bazen content=None, reasoning content ayrı gelir
@@ -748,8 +749,7 @@ class LlamaCppBackend:
                             top_p=top_p,
                             top_k=top_k,
                             repeat_penalty=repeat_pen,
-                            stop=["<|end|>", "<|return|>", "<|endoftext|>",
-                                  "\nUser:", "\nHuman:"],
+                            stop=["<|im_end|>", "<|end|>", "<|eot_id|>", "<|endoftext|>", "</s>", "\nUser:", "\nHuman:"],
                         )
                         response_text = result2["choices"][0]["text"].strip()
                         elapsed_ms    = (time.time() - start) * 1000
@@ -802,8 +802,7 @@ class LlamaCppBackend:
             start = time.time()
             try:
                 # Model mimarisine göre stop tokenları
-                stop_tokens = ["<|end|>", "<|return|>", "<|endoftext|>",
-                               "\nUser:", "\nHuman:", "\n\n"]
+                stop_tokens = ["<|im_end|>", "<|end|>", "<|eot_id|>", "<|endoftext|>", "</s>", "\nUser:", "\nHuman:", "\n\n"]
                 result = self._model(
                     prompt,
                     max_tokens=params.get("max_tokens", 50),
@@ -1086,6 +1085,21 @@ class LlamaServerBackend:
 
     # ── Üretim ───────────────────────────────────────────────────
 
+    def _clean_llama_server_response(self, response: str, prompt: str) -> str:
+        """llama-server'ın promptu tekrarlama hatasını (echo) temizler."""
+        text = response.strip()
+        
+        # Eğer yanıt doğrudan prompt ile başlıyorsa kırp
+        if text.startswith(prompt.strip()):
+            text = text[len(prompt.strip()):].strip()
+            
+        # Veya prompt'un başındaki belli bir kısmı içeriyorsa (örn: "Aşağıdaki soruyu veya konuyu...")
+        snippet = prompt[:50].strip()
+        if snippet and text.startswith(snippet):
+            text = text[len(prompt):].strip()
+            
+        return text
+
     def generate(self, prompt: str, params: dict,
                  session_id: str = "", raw_prompt: str = "",
                  system_prompt: str = "") -> tuple[str, dict]:
@@ -1097,18 +1111,22 @@ class LlamaServerBackend:
         max_tokens  = int(params.get("max_tokens",  512))
         temperature = float(params.get("temperature", 0.7))
         top_p       = float(params.get("top_p",       0.9))
+        repeat_pen  = float(params.get("repetition_penalty", 1.1))
 
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        # OpenAI formatı (stop tokenlar hayati önem taşır)
         payload = {
             "messages":    messages,
             "max_tokens":  max_tokens,
             "temperature": temperature,
             "top_p":       top_p,
+            "repeat_penalty": repeat_pen, # llama.cpp extension
             "stream":      False,
+            "stop": ["<|im_end|>", "<|end|>", "<|eot_id|>", "<|endoftext|>", "</s>", "\nUser:", "\nHuman:"],
         }
 
         try:
@@ -1131,27 +1149,59 @@ class LlamaServerBackend:
             # Hâlâ boşsa tüm string alanları birleştir
             if not text.strip():
                 text = " ".join(str(v) for v in msg.values() if isinstance(v, str) and v.strip())
+            
+            # Echo edilen prompt'u temizle
+            text = self._clean_llama_server_response(text, prompt)
+            
+            # Yanıttan başı boş kalan stop tokenları temizle
+            for st in payload["stop"]:
+                text = text.replace(st, "")
+            text = text.strip()
+            
             prompt_tokens = usage.get("prompt_tokens", 0)
             completion_tokens = usage.get("completion_tokens", 0)
             elapsed = time.time() - t0
+            
             # completion_tokens 0 gelirse kelime sayısından tahmin et
             if completion_tokens == 0:
                 completion_tokens = max(1, len(text.split()) * 4 // 3)
+            
+            if prompt_tokens == 0:
+                prompt_tokens = max(1, len(prompt.split()) * 4 // 3)
+                
+            elapsed_ms = elapsed * 1000
             tps = round(completion_tokens / elapsed, 2) if elapsed > 0 else 0
 
             metrics = {
                 "backend":           "llama-server",
                 "device":            self._device,
                 "model":             self._model_name,
-                "elapsed_s":         round(elapsed, 2),
+                "duration_ms":       elapsed_ms,
                 "tokens_per_second": tps,
-                "prompt_tokens":     prompt_tokens,
-                "completion_tokens": completion_tokens,
+                "input_tokens":      prompt_tokens,
+                "output_tokens":     completion_tokens,
             }
             logger.info(
                 f"LlamaServerBackend: {completion_tokens} token, "
                 f"{tps} t/s, {round(elapsed,2)}s"
             )
+            
+            if self.db:
+                self.db.log_llm(
+                    session_id=session_id,
+                    model_name=f"llama-server/{self._model_name}",
+                    model_type="llamacpp_server",
+                    params=params,
+                    system_prompt=system_prompt,
+                    final_prompt=prompt,
+                    raw_prompt=raw_prompt,
+                    response=text,
+                    input_tokens=prompt_tokens,
+                    output_tokens=completion_tokens,
+                    duration_ms=elapsed_ms,
+                    tokens_per_second=tps,
+                )
+                
             return text, metrics
 
         except requests.exceptions.ConnectionError:
@@ -1160,6 +1210,8 @@ class LlamaServerBackend:
             return "", {"error": msg}
         except Exception as e:
             logger.error(f"LlamaServerBackend generate hatası: {e}", exc_info=True)
+            if self.db:
+                self.db.log_error(session_id, "LlamaServerBackend.generate", e)
             return "", {"error": str(e)}
 
     def generate_raw(self, prompt: str, params: dict) -> tuple[str, dict]:
@@ -1169,7 +1221,7 @@ class LlamaServerBackend:
             "prompt":      prompt,
             "max_tokens":  int(params.get("max_tokens", 256)),
             "temperature": float(params.get("temperature", 0.7)),
-            "stop":        params.get("stop", []),
+            "stop": ["<|im_end|>", "<|end|>", "<|eot_id|>", "<|endoftext|>", "</s>", "\nUser:", "\nHuman:"],
         }
         try:
             resp = requests.post(
@@ -1179,8 +1231,14 @@ class LlamaServerBackend:
             resp.raise_for_status()
             data  = resp.json()
             text  = data["choices"][0]["text"]
+            
+            # Temizlik
+            for st in payload["stop"]:
+                text = text.replace(st, "")
+            text = text.strip()
+
             elapsed = time.time() - t0
-            return text, {"elapsed_s": round(elapsed, 2), "backend": "llama-server"}
+            return text, {"duration_ms": elapsed * 1000, "backend": "llama-server"}
         except Exception as e:
             logger.error(f"LlamaServerBackend generate_raw hatası: {e}")
             return "", {"error": str(e)}

@@ -25,25 +25,26 @@ class SearchResult:
 class SearchQueryOptimizer:
     """Prompttan web araması için kısa ve etkili sorgu çıkarır."""
 
-    # Arama için gereksiz kelimeler
+    # Arama için gereksiz kelimeler (Genişletilmiş liste)
     STOPWORDS_TR = {
-        # Zaman zarfları — sözlük aramasını tetikler
+        # Zaman zarfları
         "günümüzde", "günümüz", "bugün", "şimdi", "artık", "hâlâ", "hala",
-        "geçmişte", "gelecekte", "eskiden", "yakında", "son", "yeni", "eski",
+        "geçmişte", "gelecekte", "eskiden", "yakında", "son", "yeni", "eski", "önce", "sonra",
         # Soru ekleri ve fiil kalıpları
         "bana", "bence", "acaba", "lütfen", "merhaba", "selam", "bir",
         "bu", "şu", "o", "ve", "ile", "de", "da", "mi", "mı", "mu", "mü",
         "için", "gibi", "kadar", "ama", "fakat", "ancak", "çok", "az",
         "daha", "en", "her", "hiç", "bile", "zaten", "nasıl",
-        "neden", "niye", "hangi", "ne", "kim", "nerede",
+        "neden", "niye", "hangi", "ne", "kim", "nerede", "bunu", "şunu", "onunu",
         "misin", "mısın", "musun", "müsün", "misiniz", "mısınız",
         "yapar", "yapabilir", "edebilir", "eder", "ediyor", "yapıyor",
-        "ver", "yap", "söyle", "anlat", "açıkla", "yaz", "göster",
+        "ver", "yap", "söyle", "anlat", "açıkla", "yaz", "göster", "yanıtla", "cevapla",
         "hakkında", "konusunda", "üzerinde", "ilgili", "dair",
-        "çalışılan", "çalışan", "üzerinden",
+        "çalışılan", "çalışan", "üzerinden", "nedir", "kimdir", "hangisidir",
         "eleştir", "eleştirir", "eleştirilsel", "eleştirel", "yorumla",
-        "yorum", "düşün", "düşünüyor", "değerlendir", "incele",
+        "yorum", "düşün", "düşünüyor", "değerlendir", "incele", "kısaca", "özetle",
     }
+    
     STOPWORDS_EN = {
         "please", "can", "you", "could", "tell", "me", "about", "what",
         "is", "are", "how", "to", "do", "does", "did", "will", "would",
@@ -57,28 +58,28 @@ class SearchQueryOptimizer:
         """Prompttan anlamlı arama sorgusunu çıkarır."""
         text = prompt.strip()
 
-        # Soru işareti ve özel karakterleri temizle
-        import re
-        text = re.sub(r"[?!\.]+$", "", text).strip()
+        # Noktalama işaretlerini temizle
+        text = re.sub(r"[^\w\s]", " ", text)
 
         # Kelimelere böl
-        words = re.findall(r"\b\w+\b", text, re.UNICODE)
+        words = text.split()
         all_stops = self.STOPWORDS_TR | self.STOPWORDS_EN
 
-        # Anlamlı kelimeleri filtrele (stopword değil, 3+ karakter)
-        keywords = [
-            w for w in words
-            if w.lower() not in all_stops and len(w) >= 3
-        ]
+        # Anlamlı kelimeleri filtrele (stopword değil, 2+ karakter)
+        keywords = []
+        for w in words:
+            wl = w.lower()
+            if wl not in all_stops and len(wl) > 2:
+                keywords.append(w)
 
-        # En fazla 6 anahtar kelime al
-        query = " ".join(keywords[:6])
+        # Eğer gereksizleri atınca çok az kelime kaldıysa, kelime elemeden ilk halini (kısaltarak) kullan
+        if len(keywords) < 2:
+            query = " ".join(words[:5])
+        else:
+            # En fazla 5 anahtar kelime al
+            query = " ".join(keywords[:5])
 
-        # Çok kısa kaldıysa orijinal promptun ilk 60 karakterini kullan
-        if len(query.strip()) < 8:
-            query = text[:60]
-
-        logger.debug(f"Arama sorgusu: '{query}' ← '{prompt[:60]}'")
+        logger.debug(f"Arama sorgusu optimizasyonu: '{prompt[:60]}' -> '{query}'")
         return query.strip()
 
 
@@ -97,12 +98,12 @@ class ResultRanker:
         """sentence-transformers'ı yüklemeyi dene."""
         try:
             from sentence_transformers import SentenceTransformer
-            # Küçük, hızlı model
-            self._semantic_model = SentenceTransformer("all-MiniLM-L6-v2")
+            # Türkçe desteği olan çok dilli model (all-MiniLM-L6-v2 sadece İngilizce içindir)
+            self._semantic_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
             self._semantic_available = True
-            logger.info("Semantik sıralama aktif (all-MiniLM-L6-v2)")
+            logger.info("Semantik sıralama aktif (paraphrase-multilingual-MiniLM-L12-v2)")
         except Exception:
-            logger.info("sentence-transformers yok, sadece BM25 kullanılacak.")
+            logger.info("sentence-transformers (multilingual) yüklenemedi, sadece BM25 kullanılacak.")
 
     def rank(self, query: str, results: list[dict]) -> list[SearchResult]:
         """Sonuçları sıralar ve skor atar."""
@@ -118,10 +119,10 @@ class ResultRanker:
         else:
             semantic_scores = [0.0] * len(results)
 
-        # Hibrid skor: 0.6 * BM25 + 0.4 * semantic
+        # Hibrid skor: Semantik anlama daha fazla güven (0.7), BM25'e (0.3)
         ranked = []
         for i, r in enumerate(results):
-            hybrid = 0.6 * bm25_scores[i] + 0.4 * semantic_scores[i]
+            hybrid = 0.3 * bm25_scores[i] + 0.7 * semantic_scores[i]
             ranked.append(SearchResult(
                 title=r.get("title", ""),
                 url=r.get("href", r.get("link", "")),
@@ -156,16 +157,19 @@ class ResultRanker:
         try:
             import numpy as np
             texts = [
-                (r.get("title", "") + " " + r.get("body", r.get("snippet", "")))[:512]
+                (r.get("title", "") + " " + r.get("body", r.get("snippet", "")))[:1024]
                 for r in results
             ]
-            embeddings = self._semantic_model.encode([query] + texts, show_progress_bar=False)
+            # show_progress_bar=False eklenmedi çünkü bazı versiyonlarda desteklenmiyor olabilir, varsayılan sessizdir.
+            embeddings = self._semantic_model.encode([query] + texts)
             q_emb = embeddings[0]
             doc_embs = embeddings[1:]
             # Cosine similarity
             scores = []
             for d in doc_embs:
-                norm = (np.linalg.norm(q_emb) * np.linalg.norm(d))
+                norm_q = np.linalg.norm(q_emb)
+                norm_d = np.linalg.norm(d)
+                norm = norm_q * norm_d
                 score = float(np.dot(q_emb, d) / norm) if norm > 0 else 0.0
                 scores.append(max(0.0, score))
             return scores
@@ -183,13 +187,18 @@ class WebSearcher:
         self.ranker = ResultRanker()
 
     def search(self, prompt: str, num_results: int = 5,
-               region: str = "tr-tr", session_id: str = "") -> tuple[list[SearchResult], str]:
+               region: str = "tr-tr", session_id: str = "", optimize_query: bool = True) -> tuple[list[SearchResult], str]:
         """
         Ana arama fonksiyonu.
         Returns: (ranked_results, search_query)
         """
         start = time.time()
-        search_query = self.optimizer.extract_query(prompt)
+        
+        if optimize_query:
+            search_query = self.optimizer.extract_query(prompt)
+        else:
+            search_query = prompt
+
         raw_results = []
 
         try:
@@ -202,7 +211,7 @@ class WebSearcher:
                     search_query,
                     region=region,
                     safesearch="moderate",
-                    max_results=num_results * 2  # Sıralama için fazla al
+                    max_results=max(10, num_results * 2)  # Sıralama için yeterli aday havuzu
                 ))
                 raw_results = raw
                 logger.info(f"DuckDuckGo: {len(raw_results)} sonuç ({search_query})")
@@ -230,13 +239,13 @@ class WebSearcher:
                 raw_results=[{
                     "title": r.get("title", ""),
                     "url": r.get("href", ""),
-                    "snippet": r.get("body", "")[:500]
+                    "snippet": r.get("body", "")
                 } for r in raw_results],
                 ranked_results=[{
                     "rank": r.rank,
                     "title": r.title,
                     "url": r.url,
-                    "snippet": r.snippet[:500]
+                    "snippet": r.snippet
                 } for r in ranked],
                 relevance_scores=[r.relevance_score for r in ranked],
                 duration_ms=duration_ms
@@ -244,7 +253,7 @@ class WebSearcher:
 
         return ranked, search_query
 
-    def format_context(self, results: list[SearchResult], max_chars: int = 3000) -> str:
+    def format_context(self, results: list[SearchResult], max_chars: int = 15000) -> str:
         """Arama sonuçlarını LLM için bağlam metnine çevirir."""
         if not results:
             return ""

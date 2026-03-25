@@ -1,12 +1,14 @@
 """
 modules/dspy_enricher.py
 DSPy ile prompt zenginleştirme ve LLM tabanlı otomatik mod seçimi.
-Mod seçimi sabit keyword listesiyle değil, LLM'e sorarak yapılır.
+Mod seçimi DSPy'nin bildirimsel programlama mimarisi (Signatures) ile yapılır.
 """
 
 import time
 import logging
+import re
 from dataclasses import dataclass
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -31,59 +33,220 @@ class EnrichmentResult:
     duration_ms: float
 
 
+# DSPy Yüklemesi Başarılıysa Kullanılacak Bildirimsel (Declarative) Sınıflar
+try:
+    import dspy
+
+    class CustomLocalLM(dspy.LM):
+        """DSPy için yerel model sarıcı (wrapper)."""
+        def __init__(self, loader):
+            super().__init__("local")
+            self.loader = loader
+            self.provider = "local"
+            self.kwargs = {
+                "temperature": 0.0,
+                "max_tokens": 150,
+            }
+
+        def basic_request(self, prompt: str, **kwargs):
+            max_tokens = kwargs.get("max_tokens") or self.kwargs.get("max_tokens")
+            temperature = kwargs.get("temperature") or self.kwargs.get("temperature")
+            
+            gen_fn = getattr(self.loader, "generate_raw", None) or self.loader.generate
+            response_text, _ = gen_fn(
+                prompt=prompt,
+                params={"max_tokens": max_tokens, "temperature": temperature}
+            )
+            return response_text
+
+        def __call__(self, prompt, only_completed=True, return_sorted=False, **kwargs):
+            return [self.basic_request(prompt, **kwargs)]
+
+    class SearchQueryGeneration(dspy.Signature):
+        """Kullanıcının sorusunu analiz et. Eğer soru birden fazla aşama veya farklı konu içeriyorsa, her biri için arama motoru (Google) sorgusu oluştur. Tek bir konu varsa tek sorgu yaz. Sorgular arasında '|' işareti kullan."""
+        user_prompt = dspy.InputField(desc="Kullanıcının orijinal uzun sorusu")
+        search_query = dspy.OutputField(desc="En fazla 3 farklı kısa arama sorgusu, '|' ile ayrılmış (örn: 'yapay zeka nedir | yapay zeka güncel araştırmalar')")
+
+    class ModeClassification(dspy.Signature):
+        """Kullanıcının sorusunu analiz et ve en uygun yanıt stratejisini (modu) seç.
+        Kabul edilen modlar: ChainOfThought, ReAct, ProgramOfThought, MultiChainComparison, Summarize, Predict.
+        """
+        question = dspy.InputField(desc="Kullanıcının sorduğu ham soru")
+        mode = dspy.OutputField(desc="Sadece seçilen modun tam adı (örn: Summarize, ChainOfThought)")
+        reason = dspy.OutputField(desc="Bu modun neden seçildiğine dair tek cümlelik kısa açıklama")
+
+    class SummarizeTask(dspy.Signature):
+        """Verilen metni veya konuyu en fazla 5 madde halinde özetle."""
+        context = dspy.InputField(desc="Varsa arama sonuçları veya ek bağlam")
+        question = dspy.InputField(desc="Özetlenecek konu")
+        answer = dspy.OutputField(desc="Kısa, Türkçe ve maddeler halinde özet")
+
+    class DefaultTask(dspy.Signature):
+        """Soruya verilen bağlamı da değerlendirerek Türkçe, net ve yapılandırılmış bir yanıt ver."""
+        context = dspy.InputField(desc="Arama sonuçları veya ek bağlam")
+        question = dspy.InputField(desc="Kullanıcının sorusu")
+        answer = dspy.OutputField(desc="Türkçe yanıt")
+
+    class CompareTask(dspy.Signature):
+        """Aşağıdaki konuyu Türkçe karşılaştırmalı olarak değerlendir. Artı/eksi ve farklı durumları belirt."""
+        context = dspy.InputField(desc="Bağlam")
+        question = dspy.InputField(desc="Karşılaştırılacak konu")
+        answer = dspy.OutputField(desc="Karşılaştırmalı Türkçe değerlendirme")
+
+    class ProgramTask(dspy.Signature):
+        """Aşağıdaki problemi çöz, formül veya kod parçaları kullan."""
+        context = dspy.InputField(desc="Bağlam")
+        question = dspy.InputField(desc="Problem")
+        answer = dspy.OutputField(desc="Çözüm ve doğrulama")
+
+    class StudioRouter(dspy.Module):
+        """Kullanıcının sorusunu analiz edip doğru alt DSPy modülüne yönlendiren ana program."""
+        def __init__(self):
+            super().__init__()
+            # Predict veya ChainOfThought kullanarak sınıflandırma
+            self.classifier = dspy.Predict(ModeClassification)
+            self.search_query_gen = dspy.Predict(SearchQueryGeneration)
+            
+            # Alt görevler
+            self.summarizer = dspy.ChainOfThought(SummarizeTask)
+            self.comparator = dspy.ChainOfThought(CompareTask)
+            self.programmer = dspy.ChainOfThought(ProgramTask)
+            self.default_cot = dspy.ChainOfThought(DefaultTask)
+            
+        def forward(self, question, context=""):
+            # 1. LLM'e hangi modu kullanacağını sor
+            classification = self.classifier(question=question)
+            mode = str(classification.mode).strip()
+            reason = str(classification.reason).strip()
+            
+            return mode, reason
+            
+        def generate_query(self, question):
+            result = self.search_query_gen(user_prompt=question)
+            return str(result.search_query).strip(' "\'\n\r')
+
+    DSPY_IMPORTED = True
+except ImportError:
+    DSPY_IMPORTED = False
+
+
 class DSPyEnricher:
     """
     DSPy ile prompt zenginleştirme.
-    Mod seçimi için yüklü LLM'i kullanır (dspy.Predict ile).
-    DSPy veya LLM yoksa basit fallback uygular.
+    Mod seçimi için yüklü LLM'i kullanır.
+    DSPy yüklü değilse veya model yanıt veremezse basit kural tabanlı (fallback) mantık uygular.
     """
 
     def __init__(self, db_manager=None):
         self.db = db_manager
-        self._dspy_available = False
+        self._dspy_available = DSPY_IMPORTED
         self._lm = None
-        self._mode_predictor = None
         self._loader = None
         self._classify_cooldown_until = 0.0
-        self._try_init_dspy()
+        self._router = None
 
-    def _try_init_dspy(self):
-        try:
-            import dspy
-            self._dspy = dspy
-            self._dspy_available = True
-            logger.info("DSPy yüklendi. LLM bağlandığında mod seçimi LLM ile yapılacak.")
-        except ImportError:
+        if self._dspy_available:
+            logger.info("DSPy yüklü. Bildirimsel (declarative) mimari kullanılacak.")
+            self._router = StudioRouter()
+        else:
             logger.warning("DSPy bulunamadı. Fallback mod aktif.")
 
     def configure_lm(self, model_path: str, device: str = "CPU"):
-        """
-        Model yüklenince çağrılır. DSPy LM bağlantısı yerine
-        direkt LLM sınıflandırması için loader referansını saklar.
-        DSPy'ın JSONAdapter'ı küçük modellerde güvenilmez olduğu için
-        doğrudan generate() kullanıyoruz.
-        """
+        """Model yüklendiğinde çağrılır."""
         loader = getattr(self, "_loader", None)
         if loader is None or not loader.is_loaded:
             logger.warning("DSPy LM: loader hazır değil.")
             return False
-        logger.info(f"DSPy direkt LLM modu aktif: {model_path} [{device}]")
-        self._mode_predictor = "direct"   # Flag: direkt LLM kullan
+
+        if self._dspy_available:
+            try:
+                self._lm = CustomLocalLM(loader)
+                dspy.settings.configure(lm=self._lm)
+                logger.info(f"DSPy yerel modeli yapılandırıldı: {model_path} [{device}]")
+            except Exception as e:
+                logger.warning(f"DSPy ayarlanırken hata: {e}")
+        else:
+            logger.info(f"DSPy yok, direkt model kullanılacak: {model_path}")
+        
         return True
 
     def set_loader(self, loader):
         """ModelLoader referansını set et (orchestrator tarafından çağrılır)."""
         self._loader = loader
+        
+    def _clean_query(self, query: str) -> str:
+        """LLM çıktısını temizler ve tekrarları engeller."""
+        q = query.replace(",", " ").replace('"', '').replace("'", "").strip()
+        q = re.sub(r'[^\w\s]', '', q)
+        words = []
+        for w in q.split():
+            if w.lower() not in [x.lower() for x in words]:
+                words.append(w)
+        return " ".join(words[:5])
+
+    def generate_search_query(self, prompt: str) -> list[str]:
+        """LLM kullanarak bir veya birden fazla arama motoru sorgusu oluşturur."""
+        loader = getattr(self, "_loader", None)
+        if not (loader and loader.is_loaded):
+            return [prompt[:60]]
+            
+        if self._dspy_available and self._router and self._lm:
+            try:
+                import concurrent.futures
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                
+                def run_dspy():
+                    return self._router.generate_query(question=prompt)
+                    
+                future = executor.submit(run_dspy)
+                raw_queries = future.result(timeout=10)
+                executor.shutdown(wait=False)
+                
+                if raw_queries:
+                    # Gelen metni | veya \n ile böl
+                    parts = re.split(r'\||\n', raw_queries)
+                    final_queries = []
+                    for part in parts:
+                        cleaned = self._clean_query(part)
+                        if cleaned and len(cleaned) > 2 and cleaned not in final_queries:
+                            final_queries.append(cleaned)
+                    return final_queries[:3] if final_queries else [self._clean_query(raw_queries)]
+                    
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"DSPy Arama sorgusu zaman aşımı, fallback kullanılıyor.")
+            except Exception as e:
+                logger.warning(f"DSPy Arama sorgusu hatası: {e}")
+                
+        # DSPy çalışmazsa fallback
+        fallback_query = self._fallback_generate_search_query(prompt)
+        return [self._clean_query(q) for q in fallback_query.split("|")][:3] if "|" in fallback_query else [self._clean_query(fallback_query)]
+        
+    def _fallback_generate_search_query(self, prompt: str) -> str:
+        try:
+            loader = self._loader
+            gen_fn = getattr(loader, "generate_raw", None) or loader.generate
+            
+            p = (
+                "Sen bir SEO uzmanısın. Kullanıcının birden fazla sorusu varsa her soru için bir arama kelimesi bul ve aralarına '|' koy.\n"
+                "Örnek: yapay zeka nedir | yapay zeka güncel gelişmeler\n"
+                f"Kullanıcı metni: {prompt}\n"
+                "Sorgular:"
+            )
+            response, _ = gen_fn(prompt=p, params={"max_tokens": 30, "temperature": 0.0})
+            resp = str(response).strip(' "\'\n\r')
+            if resp and len(resp) < 150:
+                return resp
+            return prompt[:60]
+        except Exception:
+            return prompt[:60]
 
     def enrich(self, prompt: str, search_context: str = "",
                session_id: str = "") -> EnrichmentResult:
         start = time.time()
         steps = []
 
-        # Mod seçimi: önce DSPy+LLM, yoksa fallback
         mode, reason = self._select_mode_via_llm(prompt, steps)
 
-        # Prompt zenginleştirme
         enriched, steps = self._apply_template(prompt, mode, search_context, steps)
 
         duration_ms = (time.time() - start) * 1000
@@ -110,126 +273,103 @@ class DSPyEnricher:
 
         return result
 
-    # DSPy classify için maksimum süre (saniye). Bu süreyi aşan büyük modellerde
-    # rule_fallback kullanılır — asıl generate() için zaman harcamayız.
     _CLASSIFY_TIMEOUT_S = 15
     _CLASSIFY_COOLDOWN_S = 30
-    _CLASSIFY_MAX_TOKENS = 8
+    _CLASSIFY_MAX_TOKENS = 12
 
     def _select_mode_via_llm(self, prompt: str, steps: list) -> tuple[str, str]:
-        """LLM ile mod seç. Başarısız olursa fallback."""
+        """LLM ile mod seç. Başarısız olursa kural tabanlı sisteme (fallback) geçer."""
 
-        # Önce hızlı heuristic: bariz durumlarda LLM'e gitme.
         mode, reason = self._heuristic_select_mode(prompt)
         if mode:
             steps.append({"action": "heuristic_mode", "mode": mode})
             return mode, reason
 
-        # DSPy Predict yerine direkt LLM çağrısı (JSONAdapter sorununu atlar)
-        if self._mode_predictor == "direct":
-            now = time.time()
-            if now < self._classify_cooldown_until:
-                steps.append({"action": "classify_cooldown_active"})
-                return self._rule_fallback(prompt, steps)
+        now = time.time()
+        if now < self._classify_cooldown_until:
+            steps.append({"action": "classify_cooldown_active"})
+            return self._rule_fallback(prompt, steps)
 
-            loader = getattr(self, "_loader", None)
-            if loader and loader.is_loaded:
-                # Büyük modellerde sınıflandırma çok yavaş olabilir;
-                # timeout'u aşarsa rule_fallback kullanırız.
-                #
-                # Not: Python thread'leri çoğu backend'de çalışan generate() çağrısını
-                # gerçek anlamda iptal edemez. Bu yüzden timeout sonrası kısa bir
-                # "cooldown" uygulayıp aynı anda çok sayıda classify işinin birikmesini
-                # engelliyoruz.
+        loader = getattr(self, "_loader", None)
+        if not (loader and loader.is_loaded):
+            return self._rule_fallback(prompt, steps)
+
+        # Eğer DSPy yüklüyse ve LM ayarlandıysa DSPy Predictor ile seç
+        if self._dspy_available and self._router and self._lm:
+            try:
+                import concurrent.futures
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                
+                def run_dspy():
+                    return self._router(question=prompt)
+                    
+                future = executor.submit(run_dspy)
+                mode, reason = future.result(timeout=self._CLASSIFY_TIMEOUT_S)
+                executor.shutdown(wait=False)
+                
+                matched = self._fuzzy_match_mode(mode)
+                steps.append({"action": "dspy_selected_mode", "raw": mode, "matched": matched})
+                logger.info(f"DSPy Sınıflandırma: '{mode}' -> '{matched}'")
+                return matched, reason
+                
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"DSPy Sınıflandırma zaman aşımı, fallback kullanılıyor.")
+                steps.append({"action": "classify_timeout"})
+                self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
+                return self._rule_fallback(prompt, steps)
+            except Exception as e:
+                logger.warning(f"DSPy Predict başarısız, fallback: {e}")
+                steps.append({"action": "dspy_failed", "error": str(e)})
+                return self._rule_fallback(prompt, steps)
+                
+        # DSPy yüklü değilse manuel prompt ile sınıflandır
+        else:
+            try:
                 import concurrent.futures
                 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                 future = executor.submit(self._fallback_llm_classify, prompt, steps)
-                try:
-                    result = future.result(timeout=self._CLASSIFY_TIMEOUT_S)
-                    executor.shutdown(wait=False)
-                    return result
-                except concurrent.futures.TimeoutError:
-                    logger.warning(
-                        f"LLM classify {self._CLASSIFY_TIMEOUT_S}s'de tamamlanamadı, "
-                        "rule_fallback kullanılıyor."
-                    )
-                    steps.append({"action": "classify_timeout"})
-                    self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
-                    # wait=False: ana thread bloklanmaz; arka plan thread'i kendi
-                    # başına tamamlanır. cancel_futures yalnızca bekleyen işleri iptal
-                    # eder — halihazırda çalışan thread durdurulamaz (Python sınırı).
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    return self._rule_fallback(prompt, steps)
-
-        # DSPy predictor hazırsa dene (gelecekte daha yetenekli modeller için)
-        if self._dspy_available and self._mode_predictor and self._mode_predictor != "direct":
-            try:
-                steps.append({"action": "dspy_llm_mode_selection"})
-                result = self._mode_predictor(question=prompt)
-                raw_mode = str(result.mode).strip()
-                reason = str(result.reason).strip()
-                matched = self._fuzzy_match_mode(raw_mode)
-                steps.append({"action": "llm_selected_mode", "raw": raw_mode, "matched": matched})
-                logger.info(f"DSPy Predict mod: '{raw_mode}' → '{matched}'")
-                return matched, reason
-            except Exception as e:
-                logger.warning(f"DSPy Predict başarısız, fallback: {e}")
-                steps.append({"action": "dspy_llm_failed", "error": str(e)})
-
-        # Son çare
-        return self._rule_fallback(prompt, steps)
+                result = future.result(timeout=self._CLASSIFY_TIMEOUT_S)
+                executor.shutdown(wait=False)
+                return result
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"LLM classify zaman aşımı, rule_fallback kullanılıyor.")
+                steps.append({"action": "classify_timeout"})
+                self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
+                executor.shutdown(wait=False, cancel_futures=True)
+                return self._rule_fallback(prompt, steps)
 
     def _heuristic_select_mode(self, prompt: str) -> tuple[str | None, str]:
-        """
-        Çok bariz durumlarda LLM'e gitmeden mod seç.
-        (Hız + güvenilirlik; ayrıca injection etkisini azaltır.)
-        """
         p = (prompt or "").lower()
 
-        # Özetleme
         if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca", "madde madde özet"]):
             return "Summarize", "Heuristik: özetleme kalıbı."
 
-        # Karşılaştırma / eleştiri
         if any(k in p for k in [
             "karşılaştır", "kıyasla", "farkları", "farkları neler", "avantaj", "dezavantaj",
             "artıları", "eksileri", "pro", "con", "vs", "eleştir", "değerlendir",
         ]):
             return "MultiChainComparison", "Heuristik: karşılaştırma/eleştiri kalıbı."
 
-        # Hesaplama / kod
         if any(k in p for k in [
             "hesapla", "calculate", "kod yaz", "write code", "python", "sql", "regex",
             "formül", "denklem", "algoritma", "complexity", "big o",
         ]):
             return "ProgramOfThought", "Heuristik: hesaplama/kod kalıbı."
 
-        # Güncel bilgi / araştırma
         if any(k in p for k in ["güncel", "haber", "latest", "news", "araştır", "kaynak", "link"]):
             return "ReAct", "Heuristik: güncel bilgi/araştırma kalıbı."
 
-        # Heuristik karar veremediyse None döndür
         return None, ""
 
     def _fallback_llm_classify(self, prompt: str, steps: list) -> tuple[str, str]:
-        """
-        DSPy olmadan direkt LLM'e kısa sınıflandırma sorusu gönder.
-        Sadece kullanıcının ham promptu kullanılır — arama sonuçları dahil edilmez.
-
-        NOT: OpenVINO büyük modeller (20B+) bu sınıflandırmayı yanlış yapabiliyor.
-        Bu durumda rule_fallback'e geçilir ve hiç zaman harcanmaz.
-        """
         try:
             loader = self._loader
             if loader is None or not loader.is_loaded:
                 return self._rule_fallback(prompt, steps)
 
-            # generate_raw varsa kullan (daha hızlı, chat template uygulamaz)
             gen_fn = getattr(loader, "generate_raw", None) or loader.generate
 
             mode_names = ", ".join(DSPY_MODES.keys())
-            # Kısa, net, allowlist cevap bekleyen prompt.
-            # Not: Kullanıcı metni talimat içerebilir; "question" içindeki talimatları yok say.
             classify_prompt = (
                 "You are a classifier. Choose the best label for the user question.\n"
                 f"Allowed labels: {mode_names}\n"
@@ -243,19 +383,12 @@ class DSPyEnricher:
                 "Label:"
             )
 
-            if gen_fn is loader.generate:
-                response, _ = gen_fn(
-                    prompt=classify_prompt,
-                    params={"max_tokens": self._CLASSIFY_MAX_TOKENS, "temperature": 0.0},
-                )
-            else:
-                response, _ = gen_fn(
-                    prompt=classify_prompt,
-                    params={"max_tokens": self._CLASSIFY_MAX_TOKENS, "temperature": 0.0},
-                )
+            response, _ = gen_fn(
+                prompt=classify_prompt,
+                params={"max_tokens": self._CLASSIFY_MAX_TOKENS, "temperature": 0.0},
+            )
 
             raw_resp = str(response).strip()
-            # Yanıt çok uzunsa (model talimatı izlemedi) veya boşsa fallback
             if not raw_resp or len(raw_resp) > 80:
                 logger.warning(
                     f"LLM classify yanıtı uygunsuz ('{raw_resp[:60]}'), rule_fallback kullanılıyor."
@@ -279,48 +412,34 @@ class DSPyEnricher:
             return self._rule_fallback(prompt, steps)
 
     def _parse_mode_from_response(self, text: str) -> str | None:
-        """
-        Model çıktısından allowlist mod ismini güvenli şekilde çıkar.
-        - Tam eşleşme tercih edilir
-        - Değilse fuzzy match denenir
-        """
         t = (text or "").strip()
         if not t:
             return None
 
-        # Tam allowlist eşleşmesi
         for mode in DSPY_MODES:
             if t == mode:
                 return mode
 
-        # Bazı modeller noktalama/quote ekler
         cleaned = t.strip().strip("`\"'.,:;")
         for mode in DSPY_MODES:
             if cleaned == mode:
                 return mode
 
-        # Son çare: fuzzy match
         matched = self._fuzzy_match_mode(cleaned)
         return matched if matched in DSPY_MODES else None
 
     def _fuzzy_match_mode(self, raw: str) -> str:
-        """LLM çıktısından geçerli mod adı çıkar."""
         raw_lower = raw.lower()
         for mode in DSPY_MODES:
             if mode.lower() in raw_lower or raw_lower in mode.lower():
                 return mode
-        # Kısmi eşleşme
         for mode in DSPY_MODES:
             for word in mode.lower().split():
                 if word in raw_lower:
                     return mode
-        return "ChainOfThought"  # tanınmayan çıktı için güvenli default
+        return "ChainOfThought"  
 
     def _rule_fallback(self, prompt: str, steps: list) -> tuple[str, str]:
-        """
-        Ne DSPy ne LLM varsa son çare: minimum kural seti.
-        Sadece çok belirgin kategoriler için, yoksa ChainOfThought.
-        """
         p = (prompt or "").lower()
         steps.append({"action": "rule_fallback"})
 
@@ -335,7 +454,7 @@ class DSPyEnricher:
             return "ProgramOfThought", "Hesaplama/kod kalıbı tespit edildi."
         if any(k in p for k in ["güncel", "haber", "latest", "news"]):
             return "ReAct", "Güncel bilgi kalıbı tespit edildi."
-        # Soru işareti veya karmaşık yapı → CoT
+        
         if "?" in (prompt or "") or len((prompt or "").split()) > 8:
             return "ChainOfThought", "Karmaşık soru yapısı tespit edildi."
         return "Predict", "Kısa ve basit ifade."
@@ -343,48 +462,54 @@ class DSPyEnricher:
     def _apply_template(self, prompt: str, mode: str,
                         search_context: str, steps: list) -> tuple[str, list]:
         """
-        Seçilen moda göre prompt'u zenginleştir.
-        Bağlam sona yerleştirilir — base modellerde başa koyunca
-        model bağlamı devam ettirmeye çalışır, bu yanlış çıktı üretir.
+        Gelen promptu ve varsa arama sonuçlarını, modern Chat (sohbet) modellerine 
+        uygun olarak birleştirir.
+        
+        UYARI: Eski tarz "Soru: ... Yanıt:" gibi text-completion formatları Chat modellerinde (Qwen vb.)
+        modelin direkt <|im_end|> döndürmesine veya konuyu yanlış anlamasına sebep olur.
+        Artık bu şablonlar modele birer "Talimat (Instruction)" olarak veriliyor.
         """
-        ctx = f"\n\n{search_context}" if search_context else ""
+        ctx = f"\n\n--- Arama Bağlamı ---\n{search_context}\n----------------------" if search_context else ""
 
         templates = {
             "ChainOfThought": (
-                "Aşağıdaki soruya Türkçe, net ve yapılandırılmış bir yanıt ver.\n"
-                "- Varsayımların varsa belirt.\n"
-                "- Gerekçeyi kısa tut.\n\n"
-                f"Soru: {prompt}{ctx}\n\nYanıt:"
+                f"{ctx}\n\n"
+                f"Lütfen aşağıdaki sorunun TAMAMINI net ve yapılandırılmış bir şekilde adım adım yanıtla.\n"
+                f"Birden fazla göreviniz varsa hepsini sırayla yerine getirin.\n"
+                f"Varsayımların varsa belirt ve gerekçeni kısa tut.\n\n"
+                f"Soru: {prompt}"
             ),
             "ReAct": (
-                "Aşağıdaki soruya arama sonuçlarına dayanarak Türkçe yanıt ver.\n"
-                "- Önemli iddialarda kaynağa atıf yap (varsa).\n"
-                "- Bilinmeyen noktaları açıkça belirt.\n\n"
-                f"Soru: {prompt}{ctx}\n\nYanıt:"
+                f"{ctx}\n\n"
+                f"Lütfen aşağıdaki sorudaki TÜM görevleri, yukarıda verilen arama sonuçlarına (bağlama) dayanarak eksiksiz yanıtla.\n"
+                f"Birden fazla göreviniz varsa hepsini sırayla yerine getirin.\n"
+                f"Önemli iddialarda hangi kaynaktan ([1], [2] vb.) aldığını belirt.\n\n"
+                f"Soru: {prompt}"
             ),
             "ProgramOfThought": (
-                "Aşağıdaki problemi çöz.\n"
-                "- Gerekirse formül veya kısa kod parçaları kullan.\n"
-                "- Sonucu kontrollü şekilde doğrula.\n\n"
-                f"Problem: {prompt}{ctx}\n\nÇözüm:"
+                f"{ctx}\n\n"
+                f"Aşağıdaki problemi çöz. Gerekirse matematiksel formüller veya kod parçaları kullan.\n"
+                f"Lütfen sonucunu adım adım doğrula.\n\n"
+                f"Problem: {prompt}"
             ),
             "MultiChainComparison": (
-                "Aşağıdaki konuyu Türkçe karşılaştırmalı değerlendir.\n"
-                "- En az 2 alternatif/çerçeve sun.\n"
-                "- Artı/eksi ve hangi durumda hangisinin uygun olduğunu belirt.\n\n"
-                f"Konu: {prompt}{ctx}\n\nDeğerlendirme:"
+                f"{ctx}\n\n"
+                f"Aşağıdaki soruyu veya konuyu karşılaştırmalı olarak değerlendir.\n"
+                f"Soru birden fazla adım (ör: önce yanıtla, sonra eleştir) içeriyorsa, lütfen HİÇBİR adımı atlama.\n"
+                f"Alternatiflerin avantajlarını ve dezavantajlarını açıkça belirt.\n\n"
+                f"Konu: {prompt}"
             ),
             "Summarize": (
-                "Aşağıdaki konuyu Türkçe kısa özetle.\n"
-                "- 5 maddeyi geçme.\n\n"
-                f"Konu: {prompt}{ctx}\n\nÖzet:"
+                f"{ctx}\n\n"
+                f"Lütfen aşağıdaki konuyu/metni en fazla 5 madde halinde özetle.\n\n"
+                f"Konu: {prompt}"
             ),
             "Predict": (
-                f"{prompt}{ctx}"
+                f"{ctx}\n\n"
+                f"{prompt}"
             ),
         }
 
         enriched = templates.get(mode, templates["ChainOfThought"])
         steps.append({"action": "template_applied", "mode": mode})
         return enriched, steps
-

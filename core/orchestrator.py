@@ -75,9 +75,10 @@ class Orchestrator:
     # ─────────────────────── Backend Yönetimi ────────────────────
 
     def set_backend(self, backend: str):
-        if backend in self.BACKENDS:
-            self._active_backend = backend
-            logger.info(f"Backend değiştirildi: {backend}")
+        with self._lock:
+            if backend in self.BACKENDS:
+                self._active_backend = backend
+                logger.info(f"Backend değiştirildi: {backend}")
 
     def get_backend_status(self) -> dict:
         # Ollama durumu — IPEX fork mu standart mı?
@@ -119,20 +120,25 @@ class Orchestrator:
     # ─────────────────────── Model Tarama ────────────────────────
 
     def scan_models(self) -> list:
-        try:
-            if self._active_backend == "openvino":
-                self._ov_models = self.scanner.scan()
-                self.db.log_general(self.session_id, "INFO", "Orchestrator",
-                                    f"{len(self._ov_models)} OpenVINO modeli tarandı.")
-                return self._ov_models
+        with self._lock:
+            backend = self._active_backend
 
-            elif self._active_backend == "ollama":
+        try:
+            if backend == "openvino":
+                ov_models = self.scanner.scan()
+                with self._lock:
+                    self._ov_models = ov_models
+                self.db.log_general(self.session_id, "INFO", "Orchestrator",
+                                    f"{len(ov_models)} OpenVINO modeli tarandı.")
+                return ov_models
+
+            elif backend == "ollama":
                 models = self.ollama.list_models()
                 self.db.log_general(self.session_id, "INFO", "Orchestrator",
                                     f"{len(models)} Ollama modeli listelendi.")
                 return models
 
-            elif self._active_backend == "ipex":
+            elif backend == "ipex":
                 return self._scan_ipex_local()
 
         except Exception as e:
@@ -141,20 +147,38 @@ class Orchestrator:
         return []
 
     def get_model_choices(self) -> list[str]:
-        models = self.scan_models()
+        # Lock ekleyerek active_backend'in değişmesini engelliyoruz
+        with self._lock:
+            backend = self._active_backend
+        
+        # O anki backend ile scan yap (lock dışında, uzun sürebilir)
+        try:
+            if backend == "openvino":
+                models = self.scanner.scan()
+                with self._lock:
+                    self._ov_models = models
+            elif backend == "ollama":
+                models = self.ollama.list_models()
+            elif backend == "ipex":
+                models = self._scan_ipex_local()
+            else:
+                models = []
+        except Exception as e:
+            logger.error(f"Model tarama hatası: {e}")
+            models = []
 
-        if self._active_backend == "openvino":
+        if backend == "openvino":
             if not models:
                 return []
             return [f"{m.name} [{m.model_type.upper()}] ({m.size_mb:.0f} MB)"
                     for m in models]
 
-        elif self._active_backend == "ollama":
+        elif backend == "ollama":
             if not models:
                 return []
             return [f"{m.model_id} ({m.size_gb:.1f} GB)" for m in models]
 
-        elif self._active_backend == "ipex":
+        elif backend == "ipex":
             if not models:
                 return ["⚠️ GGUF model yok — Model Galerisi'nden indirin"]
             return [f"{m.name}  ({m.size_gb:.1f} GB)  —  {m.model_id}" for m in models]
@@ -165,12 +189,15 @@ class Orchestrator:
 
     def load_model(self, model_display_name: str, device: str = "CPU",
                    ov_config: dict = None) -> tuple[bool, str]:
+        with self._lock:
+            backend = self._active_backend
+
         try:
-            if self._active_backend == "openvino":
+            if backend == "openvino":
                 return self._load_openvino(model_display_name, device, ov_config=ov_config)
-            elif self._active_backend == "ollama":
+            elif backend == "ollama":
                 return self._load_ollama(model_display_name)
-            elif self._active_backend == "ipex":
+            elif backend == "ipex":
                 return self._load_ipex(model_display_name, device)
             return False, "Bilinmeyen backend."
         except Exception as e:
@@ -180,7 +207,7 @@ class Orchestrator:
     def _load_openvino(self, display_name: str, device: str,
                        ov_config: dict = None) -> tuple[bool, str]:
         if not self._ov_models:
-            self.scan_models()
+            self._ov_models = self.scanner.scan()
         model_info = next((m for m in self._ov_models if m.name in display_name), None)
         if not model_info:
             return False, f"OpenVINO modeli bulunamadı: {display_name}"
@@ -190,7 +217,8 @@ class Orchestrator:
             ov_config=ov_config,
         )
         if success:
-            self._current_model_name = model_info.name
+            with self._lock:
+                self._current_model_name = model_info.name
             self.db.log_session(self.session_id, model_info.name, model_info.model_type)
             self.enricher.set_loader(self.ov_loader)
             self.enricher.configure_lm(model_info.path, device)
@@ -200,7 +228,8 @@ class Orchestrator:
         model_id = display_name.split(" (")[0].strip()
         success, msg = self.ollama.load(model_id, session_id=self.session_id)
         if success:
-            self._current_model_name = f"ollama/{model_id}"
+            with self._lock:
+                self._current_model_name = f"ollama/{model_id}"
             self.db.log_session(self.session_id, model_id, "ollama")
             self.enricher.set_loader(self.ollama)
             self.enricher.configure_lm(model_id)
@@ -226,7 +255,8 @@ class Orchestrator:
         success, msg = self.ipex.load(model_path, device=ipex_device,
                                       session_id=self.session_id)
         if success:
-            self._current_model_name = f"llamacpp/{Path(model_path).stem}"
+            with self._lock:
+                self._current_model_name = f"llamacpp/{Path(model_path).stem}"
             self.db.log_session(self.session_id, Path(model_path).stem, "llamacpp")
             self.enricher.set_loader(self.ipex)
             self.enricher.configure_lm(model_path)
@@ -435,29 +465,64 @@ class Orchestrator:
         try:
             search_context = ""
             if enable_search:
-                yield "🔍 Web araması yapılıyor..."
-                try:
-                    results, search_query = self.searcher.search(
-                        prompt, num_results=num_search_results,
-                        session_id=self.session_id)
-                    if results:
-                        quality = [r for r in results
-                                   if not any(d in r.url for d in JUNK_DOMAINS)]
-                        if quality:
-                            search_context = self.searcher.format_context(quality)
-                            yield f"✅ {len(quality)} kaliteli arama sonucu (sorgu: '{search_query}')\n"
-                        else:
-                            yield "⚠️ Arama sonuçları konu dışı, bağlam kullanılmıyor.\n"
+                queries = []
+                
+                # 1. Sorgu Optimizasyonu (DSPy/LLM ile)
+                if enable_dspy and loader.is_loaded:
+                    yield "🧠 Arama sorguları oluşturuluyor (LLM)...\n"
+                    try:
+                        queries = self.enricher.generate_search_query(prompt)
+                        yield f"✨ {len(queries)} farklı arama sorgusu planlandı: {', '.join(queries)}\n"
+                    except Exception as e:
+                        logger.warning(f"Arama sorgusu LLM hatası, fallback kullanılıyor: {e}")
+                        queries = [prompt]
+                else:
+                    queries = [self.searcher.optimizer.extract_query(prompt)]
+
+                # 2. Arama Çalıştırma (Çoklu Arama)
+                all_results = []
+                for idx, q in enumerate(queries):
+                    yield f"🔍 Web araması [{idx+1}/{len(queries)}]: '{q}'...\n"
+                    try:
+                        results, _ = self.searcher.search(
+                            prompt=q,
+                            num_results=num_search_results,
+                            session_id=self.session_id,
+                            optimize_query=False  # Zaten optimize ettik veya optimize edilecek bir şey yok
+                        )
+                        if results:
+                            all_results.extend(results)
+                    except Exception as e:
+                        logger.error(f"Arama hatası: {e}")
+                        self.db.log_error(self.session_id, "Pipeline.search", e)
+                        yield f"⚠️ '{q}' için arama hatası: {e}\n"
+
+                # 3. Sonuçları Birleştir ve Temizle
+                if all_results:
+                    # Aynı URL'leri deduplicate et ve JUNK_DOMAINS filtresi uygula
+                    unique_urls = set()
+                    final_results = []
+                    
+                    # Sonuçları ilgi puanına (relevance_score) göre sıralayıp filtrele
+                    for r in sorted(all_results, key=lambda x: x.relevance_score, reverse=True):
+                        if r.url not in unique_urls and not any(d in r.url for d in JUNK_DOMAINS):
+                            unique_urls.add(r.url)
+                            final_results.append(r)
+                            
+                    # En iyi num_search_results * 1.5 kadarını tut (çoklu soru olduğu için daha fazla bilgi gerekebilir)
+                    final_results = final_results[:int(num_search_results * 1.5)]
+                            
+                    if final_results:
+                        search_context = self.searcher.format_context(final_results)
+                        yield f"✅ Toplam {len(final_results)} farklı ve kaliteli arama sonucu bağlama eklendi.\n"
                     else:
-                        yield "⚠️ Arama sonucu bulunamadı.\n"
-                except Exception as e:
-                    logger.error(f"Arama hatası: {e}")
-                    self.db.log_error(self.session_id, "Pipeline.search", e)
-                    yield f"⚠️ Arama hatası: {e}\n"
+                        yield "⚠️ Arama sonuçları konu dışı veya kalitesiz, bağlam kullanılmıyor.\n"
+                else:
+                    yield "⚠️ Hiçbir arama sonucu bulunamadı.\n"
 
             final_prompt = prompt
             if enable_dspy:
-                yield "🧠 Prompt zenginleştiriliyor (DSPy)..."
+                yield "🧠 Prompt ve Görevler Yapılandırılıyor (DSPy)..."
                 try:
                     enrichment = self.enricher.enrich(
                         prompt, search_context=search_context,
@@ -549,7 +614,8 @@ class Orchestrator:
         return stats
 
     def new_session(self):
-        self.session_id = str(uuid.uuid4())[:8]
+        with self._lock:
+            self.session_id = str(uuid.uuid4())[:8]
         self.db.log_general(self.session_id, "INFO", "Orchestrator",
                             "Yeni session başlatıldı.")
 

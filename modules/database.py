@@ -29,16 +29,16 @@ class Base(DeclarativeBase):
 class SessionLog(Base):
     __tablename__ = "sessions"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(64), index=True)
-    model_name = Column(String(256))
-    model_type = Column(String(64))
+    session_id = Column(Text, index=True)
+    model_name = Column(Text)
+    model_type = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class SearchLog(Base):
     __tablename__ = "search_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(64), index=True)
+    session_id = Column(Text, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     original_prompt = Column(Text)
     search_query = Column(Text)
@@ -52,10 +52,10 @@ class SearchLog(Base):
 class DSPyLog(Base):
     __tablename__ = "dspy_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(64), index=True)
+    session_id = Column(Text, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
     original_prompt = Column(Text)
-    detected_mode = Column(String(128))
+    detected_mode = Column(Text)
     mode_reason = Column(Text)
     enriched_prompt = Column(Text)
     dspy_steps = Column(Text)       # JSON - DSPy iç işlemleri
@@ -65,10 +65,10 @@ class DSPyLog(Base):
 class LLMLog(Base):
     __tablename__ = "llm_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(64), index=True)
+    session_id = Column(Text, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    model_name = Column(String(256))
-    model_type = Column(String(64))
+    model_name = Column(Text)
+    model_type = Column(Text)
     # Parametreler
     temperature = Column(Float)
     max_tokens = Column(Integer)
@@ -90,10 +90,10 @@ class LLMLog(Base):
 class ErrorLog(Base):
     __tablename__ = "error_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(64), index=True)
+    session_id = Column(Text, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    module = Column(String(128))
-    error_type = Column(String(128))
+    module = Column(Text)
+    error_type = Column(Text)
     error_message = Column(Text)
     stack_trace = Column(Text)
     context = Column(Text)          # JSON - hata anındaki bağlam
@@ -102,10 +102,10 @@ class ErrorLog(Base):
 class GeneralLog(Base):
     __tablename__ = "general_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(64), index=True)
+    session_id = Column(Text, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    level = Column(String(16))       # INFO, DEBUG, WARNING
-    module = Column(String(128))
+    level = Column(Text)       # INFO, DEBUG, WARNING
+    module = Column(Text)
     message = Column(Text)
     data = Column(Text)              # JSON - ek veri
 

@@ -79,8 +79,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [INFO] ddgs ^(DuckDuckGo yeni paket adi^)...
-pip install ddgs --quiet
+echo [INFO] duckduckgo-search...
+pip install duckduckgo-search --quiet
 
 echo [INFO] llama-cpp-python ^(CPU fallback^)...
 pip install llama-cpp-python --quiet
