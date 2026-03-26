@@ -81,6 +81,41 @@ openvino_llm_studio/
 └── run.bat                       # Günlük çalıştırma
 ```
 
+### Mimari Akışı
+```
+[Kullanıcı Girdisi (UI)]
+         |
+         v
+[Orchestrator (core/orchestrator.py)]
+         |
+         +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(LLM ile)--> [Arama Sorgusu Üretimi]
+         |                                                                       |
+         |                                                                       v
+         +-----------------------------------------> [WebSearcher (modules/search_engine.py)]
+         |                                                                       | (DuckDuckGo + Sıralama)
+         |                                                                       v
+         |<-------------------------------------------------------------- [Arama Sonuçları]
+         |
+         +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(LLM ile)--> [Mod Seçimi & Prompt Şablonu]
+         |                                                                       |
+         |                                                                       v
+         |<-------------------------------------------------------------- [Zenginleştirilmiş Prompt]
+         |
+         v
+[Aktif Backend'e Yönlendirme]
+         |
+         +-----> [OpenVINO (modules/model_manager.py)]
+         |
+         +-----> [llama-server (modules/ipex_worker_client.py)]
+         |
+         +-----> [Ollama (modules/ipex_backend.py)]
+         |
+         v
+[LLM Yanıtı] -> [UI]
+
+(Tüm adımlar `database.py` ile loglanır)
+```
+
 ### Model dizinleri
 **GGUF (llama-server / Arc GPU)**:
 ```
@@ -166,6 +201,41 @@ run.bat
 | RAM | 16 GB+ |
 | Disk | 20 GB+ (models) |
 | Software | Anaconda, Intel oneAPI Base Toolkit 2025+ |
+
+### Architectural Flow
+```
+[User Input (UI)]
+      |
+      v
+[Orchestrator (core/orchestrator.py)]
+      |
+      +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(via LLM)--> [Search Query Generation]
+      |                                                                    |
+      |                                                                    v
+      +-----------------------------------------> [WebSearcher (modules/search_engine.py)]
+      |                                                                    | (DuckDuckGo + Reranking)
+      |                                                                    v
+      |<-------------------------------------------------------------- [Search Results]
+      |
+      +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(via LLM)--> [Mode Selection & Prompt Template]
+      |                                                                    |
+      |                                                                    v
+      |<-------------------------------------------------------------- [Enriched Prompt]
+      |
+      v
+[Route to Active Backend]
+      |
+      +-----> [OpenVINO (modules/model_manager.py)]
+      |
+      +-----> [llama-server (modules/ipex_worker_client.py)]
+      |
+      +-----> [Ollama (modules/ipex_backend.py)]
+      |
+      v
+[LLM Response] -> [UI]
+
+(All steps are logged via `database.py`)
+```
 
 ### License
 MIT License

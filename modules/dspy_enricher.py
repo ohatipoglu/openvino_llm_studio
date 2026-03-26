@@ -130,6 +130,28 @@ except ImportError:
     DSPY_IMPORTED = False
 
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+
+
+def _execute_with_timeout(func, timeout_seconds, *args, **kwargs):
+    """Executes a function with a timeout, raising TimeoutError if it takes too long."""
+    # Using ThreadPoolExecutor to run the function in a separate thread.
+    # The 'with' statement ensures that the executor is properly cleaned up.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        # Submit the function to the executor.
+        future = executor.submit(func, *args, **kwargs)
+        try:
+            # Wait for the result for a maximum of timeout_seconds.
+            # If the timeout is exceeded, a TimeoutError will be raised.
+            return future.result(timeout=timeout_seconds)
+        except TimeoutError:
+            # The 'with' block will handle the shutdown of the executor.
+            # We simply re-raise the TimeoutError to be handled by the caller.
+            # Note: This doesn't guarantee the background thread stops immediately,
+            # but it prevents the main thread from blocking indefinitely.
+            raise
+
+
 class DSPyEnricher:
     """
     DSPy ile prompt zenginleştirme.
@@ -189,21 +211,17 @@ class DSPyEnricher:
         loader = getattr(self, "_loader", None)
         if not (loader and loader.is_loaded):
             return [prompt[:60]]
-            
+
         if self._dspy_available and self._router and self._lm:
             try:
-                import concurrent.futures
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                
-                def run_dspy():
-                    return self._router.generate_query(question=prompt)
-                    
-                future = executor.submit(run_dspy)
-                raw_queries = future.result(timeout=10)
-                executor.shutdown(wait=False)
-                
+                # Refactored to use the new timeout helper function.
+                raw_queries = _execute_with_timeout(
+                    self._router.generate_query,
+                    timeout_seconds=10,
+                    question=prompt
+                )
+
                 if raw_queries:
-                    # Gelen metni | veya \n ile böl
                     parts = re.split(r'\||\n', raw_queries)
                     final_queries = []
                     for part in parts:
@@ -211,13 +229,13 @@ class DSPyEnricher:
                         if cleaned and len(cleaned) > 2 and cleaned not in final_queries:
                             final_queries.append(cleaned)
                     return final_queries[:3] if final_queries else [self._clean_query(raw_queries)]
-                    
-            except concurrent.futures.TimeoutError:
-                logger.warning(f"DSPy Arama sorgusu zaman aşımı, fallback kullanılıyor.")
+
+            except TimeoutError:
+                logger.warning("DSPy Arama sorgusu zaman aşımı, fallback kullanılıyor.")
             except Exception as e:
                 logger.warning(f"DSPy Arama sorgusu hatası: {e}")
-                
-        # DSPy çalışmazsa fallback
+
+        # Fallback logic remains the same.
         fallback_query = self._fallback_generate_search_query(prompt)
         return [self._clean_query(q) for q in fallback_query.split("|")][:3] if "|" in fallback_query else [self._clean_query(fallback_query)]
         
@@ -297,22 +315,19 @@ class DSPyEnricher:
         # Eğer DSPy yüklüyse ve LM ayarlandıysa DSPy Predictor ile seç
         if self._dspy_available and self._router and self._lm:
             try:
-                import concurrent.futures
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                
-                def run_dspy():
-                    return self._router(question=prompt)
-                    
-                future = executor.submit(run_dspy)
-                mode, reason = future.result(timeout=self._CLASSIFY_TIMEOUT_S)
-                executor.shutdown(wait=False)
+                # Refactored to use the new timeout helper function
+                mode, reason = _execute_with_timeout(
+                    self._router,
+                    timeout_seconds=self._CLASSIFY_TIMEOUT_S,
+                    question=prompt
+                )
                 
                 matched = self._fuzzy_match_mode(mode)
                 steps.append({"action": "dspy_selected_mode", "raw": mode, "matched": matched})
                 logger.info(f"DSPy Sınıflandırma: '{mode}' -> '{matched}'")
                 return matched, reason
                 
-            except concurrent.futures.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"DSPy Sınıflandırma zaman aşımı, fallback kullanılıyor.")
                 steps.append({"action": "classify_timeout"})
                 self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
@@ -325,17 +340,18 @@ class DSPyEnricher:
         # DSPy yüklü değilse manuel prompt ile sınıflandır
         else:
             try:
-                import concurrent.futures
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(self._fallback_llm_classify, prompt, steps)
-                result = future.result(timeout=self._CLASSIFY_TIMEOUT_S)
-                executor.shutdown(wait=False)
+                # Refactored to use the new timeout helper function
+                result = _execute_with_timeout(
+                    self._fallback_llm_classify,
+                    timeout_seconds=self._CLASSIFY_TIMEOUT_S,
+                    prompt=prompt,
+                    steps=steps
+                )
                 return result
-            except concurrent.futures.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"LLM classify zaman aşımı, rule_fallback kullanılıyor.")
                 steps.append({"action": "classify_timeout"})
                 self._classify_cooldown_until = time.time() + self._CLASSIFY_COOLDOWN_S
-                executor.shutdown(wait=False, cancel_futures=True)
                 return self._rule_fallback(prompt, steps)
 
     def _heuristic_select_mode(self, prompt: str) -> tuple[str | None, str]:
