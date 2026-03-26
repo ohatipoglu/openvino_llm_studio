@@ -1,1 +1,0 @@
-cd C:\OpenVINO_LLM\openvino_llm_studio\openvino_llm_studio

@@ -1,1 +1,0 @@
-git commit -m "feat: arama optimizasyonu, DSPy çoklu görev desteği, loglama iyileştirmeleri ve llama-server düzeltmeleri"
