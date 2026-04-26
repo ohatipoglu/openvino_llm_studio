@@ -1,6 +1,7 @@
 @echo off
 rem OpenVINO LLM Studio - Kurulum ve Calistirma
 rem Windows 11 + Intel Arc iGPU + Anaconda
+rem GUNCELLEME: Modern UI destegi eklendi
 
 setlocal EnableDelayedExpansion
 
@@ -85,6 +86,9 @@ pip install duckduckgo-search --quiet
 echo [INFO] llama-cpp-python ^(CPU fallback^)...
 pip install llama-cpp-python --quiet
 
+echo [INFO] Gradio (Modern UI icin)...
+pip install -U gradio --quiet
+
 echo.
 echo [OK] Paket kurulumu tamamlandi.
 
@@ -110,18 +114,18 @@ if exist "%LLAMA_SERVER_DIR%\llama-server.exe" (
 )
 
 rem ─────────────────────────────────────────────────────
-rem Uygulamayi baslat
+rem Uygulamayi baslat - Kullaniciya UI secimi sun
 rem ─────────────────────────────────────────────────────
 echo.
 echo ════════════════════════════════════════════════
-echo  Kurulum tamamlandi! Studio baslatiliyor...
-echo  Tarayicida: http://127.0.0.1:7860
+echo  Kurulum tamamlandi!
 echo ════════════════════════════════════════════════
 echo.
 
-call conda activate %ENV_NAME%
-if not exist "logs" mkdir logs
-python ui/app.py
+:: run.bat'i cagirarak UI secimini kullaniciya birak
+echo run.bat calistiriliyor...
+echo.
+call run.bat
 
 if %errorlevel% neq 0 (
     echo.

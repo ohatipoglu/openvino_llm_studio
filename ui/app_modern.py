@@ -162,7 +162,9 @@ def apply_preset(preset_name):
 def refresh_models():
     """Refresh model list."""
     orch = _get_orch()
+    logger.info(f"Refreshing models for backend: {orch._active_backend}")
     choices = orch.get_model_choices()
+    logger.info(f"Found {len(choices)} models")
     if choices:
         return gr.update(choices=choices, value=choices[0]), f"✅ {len(choices)} model bulundu."
     return gr.update(choices=[], value=None), "⚠️ Model bulunamadı."
@@ -683,9 +685,24 @@ def build_modern_ui():
         )
         
         # Backend status refresh
+        def on_backend_change(backend):
+            """Backend değiştiğinde çalışır."""
+            orch = _get_orch()
+            orch.set_backend(backend)  # Orchestrator backend'ini güncelle
+            logger.info(f"Backend değiştirildi: {backend}")
+            return get_backend_status_display(), refresh_models()[0]
+        
         refresh_backend_btn.click(
-            fn=lambda: get_backend_status_display(),
-            outputs=[backend_status_md]
+            fn=on_backend_change,
+            inputs=[backend_radio],
+            outputs=[backend_status_md, model_dropdown]
+        )
+        
+        # Backend değiştiğinde modelleri otomatik yenile
+        backend_radio.change(
+            fn=on_backend_change,
+            inputs=[backend_radio],
+            outputs=[backend_status_md, model_dropdown]
         )
         
         # Model refresh
@@ -761,6 +778,12 @@ def build_modern_ui():
         timer.tick(
             fn=lambda: format_status_html(get_system_status()),
             outputs=[status_html]
+        )
+        
+        # UI açılışında modelleri yükle
+        demo.load(
+            fn=refresh_models,
+            outputs=[model_dropdown, load_status]
         )
     
     return demo
