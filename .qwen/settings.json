@@ -10,7 +10,8 @@
       "mcp__pycharm__execute_terminal_command",
       "mcp__pycharm__replace_text_in_file",
       "mcp__pycharm__build_project",
-      "mcp__pycharm__search_text"
+      "mcp__pycharm__search_text",
+      "mcp__pycharm__find_files_by_glob"
     ]
   },
   "$version": 3
