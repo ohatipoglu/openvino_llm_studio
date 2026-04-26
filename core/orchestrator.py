@@ -14,6 +14,8 @@ IPEX-LLM EOL Notu (Mart 2026):
 import uuid
 import logging
 import threading
+import json
+import re
 from typing import Optional, Generator
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from modules.dspy_enricher import DSPyEnricher
 from modules.ipex_backend import OllamaBackend, LlamaCppBackend, IPEXModelInfo
 from modules.ipex_worker_client import IPEXWorkerClient
 from modules.hf_catalog import HFModelCatalog, CatalogEntry
+from modules.tools import ToolDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,9 @@ class Orchestrator:
         self.db      = DatabaseManager()
         self.scanner = ModelScanner()
 
+        # Araç Yürütücü (Tool Dispatcher)
+        self.tool_dispatcher = ToolDispatcher()
+
         # OpenVINO backend
         self.ov_loader = ModelLoader(db_manager=self.db)
 
@@ -62,7 +68,7 @@ class Orchestrator:
         )
 
         self.searcher = WebSearcher(db_manager=self.db)
-        self.enricher = DSPyEnricher(db_manager=self.db)
+        self.enricher = DSPyEnricher(db_manager=self.db, tool_dispatcher=self.tool_dispatcher)
         self.catalog  = HFModelCatalog()
 
         self._ov_models: list = []
@@ -451,6 +457,24 @@ class Orchestrator:
 
     # ─────────────────────── Pipeline ────────────────────────────
 
+    def _parse_action_from_response(self, response_text: str) -> tuple[Optional[str], Optional[str]]:
+        """ReAct formatındaki Action ve Action Input değerlerini çıkarır."""
+        action_match = re.search(r"Action:\s*(.+)", response_text)
+        input_match = re.search(r"Action Input:\s*(.+)", response_text, re.DOTALL)
+        
+        if action_match and input_match:
+            action = action_match.group(1).strip()
+            # Action Input sonrasında gelen extra yazıları veya observation kısmını kırp
+            raw_input = input_match.group(1).strip()
+            # Basit bir JSON parse denemesi
+            try:
+                # Sadece ilk süslü parantez bloğunu al
+                json_str = raw_input[raw_input.find("{") : raw_input.rfind("}")+1]
+                return action, json_str
+            except Exception:
+                return action, raw_input
+        return None, None
+
     def run_pipeline(self, prompt: str, params: dict,
                      enable_search: bool = True,
                      enable_dspy: bool = True,
@@ -521,6 +545,8 @@ class Orchestrator:
                     yield "⚠️ Hiçbir arama sonucu bulunamadı.\n"
 
             final_prompt = prompt
+            is_react_mode = False
+            
             if enable_dspy:
                 yield "🧠 Prompt ve Görevler Yapılandırılıyor (DSPy)..."
                 try:
@@ -529,6 +555,7 @@ class Orchestrator:
                         session_id=self.session_id
                     )
                     final_prompt = enrichment.enriched_prompt
+                    is_react_mode = (enrichment.mode == "ReAct")
                     yield f"✅ DSPy modu: **{enrichment.mode}** ({enrichment.mode_reason})\n"
                 except Exception as e:
                     logger.error(f"DSPy hatası: {e}")
@@ -556,30 +583,66 @@ class Orchestrator:
                     f"generate() çağrılıyor — backend={self._active_backend}, "
                     f"prompt_len={len(final_prompt)}, params={params}"
                 )
-                response, metrics = loader.generate(
-                    prompt=final_prompt, params=params,
-                    session_id=self.session_id, raw_prompt=prompt,
-                    system_prompt=system_prompt,
-                )
-                logger.info(f"generate() tamamlandı — metrics={metrics}")
+                
+                # ReAct Döngüsü
+                max_iterations = 3
+                current_iteration = 0
+                current_prompt = final_prompt
+                final_response = ""
+                
+                while current_iteration < max_iterations:
+                    response, metrics = loader.generate(
+                        prompt=current_prompt, params=params,
+                        session_id=self.session_id, raw_prompt=prompt,
+                        system_prompt=system_prompt,
+                    )
+                    
+                    if metrics.get("error"):
+                        err = metrics["error"]
+                        logger.error(f"Generate metrics error: {err}")
+                        self.db.log_error(self.session_id, "Pipeline.generate_metric", Exception(err))
+                        yield f"❌ Model hatası: {err}"
+                        return
 
-                if metrics.get("error"):
-                    err = metrics["error"]
-                    logger.error(f"Generate metrics error: {err}")
-                    self.db.log_error(self.session_id, "Pipeline.generate_metric", Exception(err))
-                    yield f"❌ Model hatası: {err}"
-                else:
-                    yield "---\n"
-                    yield response
-                    tps = metrics.get("tokens_per_second", "?")
-                    dur = metrics.get("duration_ms", 0)
-                    tok = metrics.get("output_tokens", "?")
-                    try:
-                        dur_fmt = f"{float(dur):.0f}ms"
-                    except Exception:
-                        dur_fmt = str(dur)
-                    yield (f"\n\n---\n📊 *{tok} token | {tps} tok/s | "
-                           f"{dur_fmt} | {self._active_backend}*")
+                    if not is_react_mode:
+                        # Normal üretim bitti
+                        final_response = response
+                        break
+                        
+                    # ReAct modundaysak Tool (Araç) çağırma var mı kontrol et
+                    action, action_input = self._parse_action_from_response(response)
+                    
+                    if action and action_input:
+                        yield f"\n🛠️ **Araç Çağrılıyor:** `{action}`\n"
+                        yield f"📦 **Parametreler:** `{action_input}`\n"
+                        
+                        # Aracı çalıştır
+                        observation = self.tool_dispatcher.execute(action, action_input)
+                        yield f"👁️ **Sonuç:** {observation}\n\n"
+                        
+                        # Modele yeni prompt oluştur (eski konuşma + observation eklenecek)
+                        # Not: Normalde Chat geçmişi olarak eklenmesi daha iyidir ancak
+                        # basitlik için prompta append ediyoruz.
+                        current_prompt += f"\n\nModel Yanıtı:\n{response}\n\nGözlem (Observation):\n{observation}\n\nLütfen gözlemi değerlendirerek nihai cevabı ver (Eğer işlem bittiyse 'Action' KULLANMA):"
+                        current_iteration += 1
+                        yield f"🔄 Ajan durumu değerlendiriyor (Adım {current_iteration}/{max_iterations})...\n"
+                        
+                    else:
+                        # Aksiyon yoksa süreç tamamlandı
+                        final_response = response
+                        break
+
+                yield "---\n"
+                yield final_response
+                tps = metrics.get("tokens_per_second", "?")
+                dur = metrics.get("duration_ms", 0)
+                tok = metrics.get("output_tokens", "?")
+                try:
+                    dur_fmt = f"{float(dur):.0f}ms"
+                except Exception:
+                    dur_fmt = str(dur)
+                yield (f"\n\n---\n📊 *{tok} token | {tps} tok/s | "
+                       f"{dur_fmt} | {self._active_backend}*")
 
             except Exception as e:
                 logger.error(f"Generate hatası: {e}", exc_info=True)

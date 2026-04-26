@@ -7,30 +7,24 @@ Mod seçimi DSPy'nin bildirimsel programlama mimarisi (Signatures) ile yapılır
 import time
 import logging
 import re
+import json
 from dataclasses import dataclass
 from typing import Literal
+
+from modules.tools import ToolDispatcher
+from core.schema import EnrichmentResultSchema
 
 logger = logging.getLogger(__name__)
 
 
 DSPY_MODES = {
     "ChainOfThought": "Karmaşık, analitik veya açıklama gerektiren sorular. Adım adım düşünme gerektirir.",
-    "ReAct":          "Güncel bilgi, haber veya araştırma gerektiren sorular.",
+    "ReAct":          "Güncel bilgi, haber, banka işlemi veya araştırma gerektiren sorular.",
     "ProgramOfThought": "Matematik, hesaplama veya kod gerektiren sorular.",
     "MultiChainComparison": "Karşılaştırma, eleştiri, avantaj/dezavantaj veya farklı bakış açısı isteyen sorular.",
     "Summarize":      "Bir konuyu özetleme veya kısa açıklama isteyen sorular.",
     "Predict":        "Basit, kısa ve doğrudan yanıt gerektiren olgusal sorular.",
 }
-
-
-@dataclass
-class EnrichmentResult:
-    original_prompt: str
-    enriched_prompt: str
-    mode: str
-    mode_reason: str
-    steps: list
-    duration_ms: float
 
 
 # DSPy Yüklemesi Başarılıysa Kullanılacak Bildirimsel (Declarative) Sınıflar
@@ -70,9 +64,10 @@ try:
     class ModeClassification(dspy.Signature):
         """Kullanıcının sorusunu analiz et ve en uygun yanıt stratejisini (modu) seç.
         Kabul edilen modlar: ChainOfThought, ReAct, ProgramOfThought, MultiChainComparison, Summarize, Predict.
+        Bankacılık ve araç gerektiren işlemler için daima ReAct seç.
         """
         question = dspy.InputField(desc="Kullanıcının sorduğu ham soru")
-        mode = dspy.OutputField(desc="Sadece seçilen modun tam adı (örn: Summarize, ChainOfThought)")
+        mode = dspy.OutputField(desc="Sadece seçilen modun tam adı (örn: Summarize, ChainOfThought, ReAct)")
         reason = dspy.OutputField(desc="Bu modun neden seçildiğine dair tek cümlelik kısa açıklama")
 
     class SummarizeTask(dspy.Signature):
@@ -135,20 +130,11 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 def _execute_with_timeout(func, timeout_seconds, *args, **kwargs):
     """Executes a function with a timeout, raising TimeoutError if it takes too long."""
-    # Using ThreadPoolExecutor to run the function in a separate thread.
-    # The 'with' statement ensures that the executor is properly cleaned up.
     with ThreadPoolExecutor(max_workers=1) as executor:
-        # Submit the function to the executor.
         future = executor.submit(func, *args, **kwargs)
         try:
-            # Wait for the result for a maximum of timeout_seconds.
-            # If the timeout is exceeded, a TimeoutError will be raised.
             return future.result(timeout=timeout_seconds)
         except TimeoutError:
-            # The 'with' block will handle the shutdown of the executor.
-            # We simply re-raise the TimeoutError to be handled by the caller.
-            # Note: This doesn't guarantee the background thread stops immediately,
-            # but it prevents the main thread from blocking indefinitely.
             raise
 
 
@@ -159,8 +145,9 @@ class DSPyEnricher:
     DSPy yüklü değilse veya model yanıt veremezse basit kural tabanlı (fallback) mantık uygular.
     """
 
-    def __init__(self, db_manager=None):
+    def __init__(self, db_manager=None, tool_dispatcher=None):
         self.db = db_manager
+        self.tool_dispatcher = tool_dispatcher or ToolDispatcher()
         self._dspy_available = DSPY_IMPORTED
         self._lm = None
         self._loader = None
@@ -214,7 +201,6 @@ class DSPyEnricher:
 
         if self._dspy_available and self._router and self._lm:
             try:
-                # Refactored to use the new timeout helper function.
                 raw_queries = _execute_with_timeout(
                     self._router.generate_query,
                     timeout_seconds=10,
@@ -235,7 +221,6 @@ class DSPyEnricher:
             except Exception as e:
                 logger.warning(f"DSPy Arama sorgusu hatası: {e}")
 
-        # Fallback logic remains the same.
         fallback_query = self._fallback_generate_search_query(prompt)
         return [self._clean_query(q) for q in fallback_query.split("|")][:3] if "|" in fallback_query else [self._clean_query(fallback_query)]
         
@@ -259,7 +244,7 @@ class DSPyEnricher:
             return prompt[:60]
 
     def enrich(self, prompt: str, search_context: str = "",
-               session_id: str = "") -> EnrichmentResult:
+               session_id: str = "") -> EnrichmentResultSchema:
         start = time.time()
         steps = []
 
@@ -269,7 +254,7 @@ class DSPyEnricher:
 
         duration_ms = (time.time() - start) * 1000
 
-        result = EnrichmentResult(
+        result = EnrichmentResultSchema(
             original_prompt=prompt,
             enriched_prompt=enriched,
             mode=mode,
@@ -315,7 +300,6 @@ class DSPyEnricher:
         # Eğer DSPy yüklüyse ve LM ayarlandıysa DSPy Predictor ile seç
         if self._dspy_available and self._router and self._lm:
             try:
-                # Refactored to use the new timeout helper function
                 mode, reason = _execute_with_timeout(
                     self._router,
                     timeout_seconds=self._CLASSIFY_TIMEOUT_S,
@@ -340,7 +324,6 @@ class DSPyEnricher:
         # DSPy yüklü değilse manuel prompt ile sınıflandır
         else:
             try:
-                # Refactored to use the new timeout helper function
                 result = _execute_with_timeout(
                     self._fallback_llm_classify,
                     timeout_seconds=self._CLASSIFY_TIMEOUT_S,
@@ -356,6 +339,9 @@ class DSPyEnricher:
 
     def _heuristic_select_mode(self, prompt: str) -> tuple[str | None, str]:
         p = (prompt or "").lower()
+
+        if any(k in p for k in ["transfer", "gönder", "öde", "bakiye", "fatura"]):
+            return "ReAct", "Heuristik: Bankacılık ve işlem komutu."
 
         if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca", "madde madde özet"]):
             return "Summarize", "Heuristik: özetleme kalıbı."
@@ -459,6 +445,8 @@ class DSPyEnricher:
         p = (prompt or "").lower()
         steps.append({"action": "rule_fallback"})
 
+        if any(k in p for k in ["transfer", "gönder", "öde", "bakiye", "fatura"]):
+            return "ReAct", "Heuristik: Bankacılık ve işlem komutu."
         if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca"]):
             return "Summarize", "Özetleme kalıbı tespit edildi."
         if any(k in p for k in [
@@ -480,12 +468,11 @@ class DSPyEnricher:
         """
         Gelen promptu ve varsa arama sonuçlarını, modern Chat (sohbet) modellerine 
         uygun olarak birleştirir.
-        
-        UYARI: Eski tarz "Soru: ... Yanıt:" gibi text-completion formatları Chat modellerinde (Qwen vb.)
-        modelin direkt <|im_end|> döndürmesine veya konuyu yanlış anlamasına sebep olur.
-        Artık bu şablonlar modele birer "Talimat (Instruction)" olarak veriliyor.
+        ReAct modunda Tool (Araç) açıklamaları da eklenir.
         """
         ctx = f"\n\n--- Arama Bağlamı ---\n{search_context}\n----------------------" if search_context else ""
+        
+        tool_desc = self.tool_dispatcher.get_tool_descriptions()
 
         templates = {
             "ChainOfThought": (
@@ -496,11 +483,14 @@ class DSPyEnricher:
                 f"Soru: {prompt}"
             ),
             "ReAct": (
+                f"Sen bir Yapay Zeka Asistanısın. Görevin, müşterilerin komutlarını güvenli ve hızlı bir şekilde yerine getirmektir.\n"
+                f"{tool_desc}\n"
+                f"EĞER BİR ARAÇ (TOOL) KULLANMAN GEREKİYORSA, ŞU FORMATTA YANIT VER VE BEKLE:\n"
+                f"Action: [Araç Adı]\n"
+                f"Action Input: [JSON Formatında Parametreler]\n\n"
+                f"Eğer araç kullanman gerekmiyorsa veya işlemi bitirdiysen doğrudan kullanıcıya yanıt ver.\n\n"
                 f"{ctx}\n\n"
-                f"Lütfen aşağıdaki sorudaki TÜM görevleri, yukarıda verilen arama sonuçlarına (bağlama) dayanarak eksiksiz yanıtla.\n"
-                f"Birden fazla göreviniz varsa hepsini sırayla yerine getirin.\n"
-                f"Önemli iddialarda hangi kaynaktan ([1], [2] vb.) aldığını belirt.\n\n"
-                f"Soru: {prompt}"
+                f"Kullanıcı İsteği: {prompt}"
             ),
             "ProgramOfThought": (
                 f"{ctx}\n\n"

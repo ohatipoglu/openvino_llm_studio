@@ -1,6 +1,6 @@
 @echo off
-:: OpenVINO LLM Studio - Kurulum ve Çalıştırma
-:: Windows 11 + Intel Arc iGPU + Anaconda
+rem OpenVINO LLM Studio - Kurulum ve Calistirma
+rem Windows 11 + Intel Arc iGPU + Anaconda
 
 setlocal EnableDelayedExpansion
 
@@ -15,9 +15,9 @@ echo ║      OpenVINO LLM Studio - Setup ^& Run      ║
 echo ╚══════════════════════════════════════════════╝
 echo.
 
-:: ─────────────────────────────────────────────────────
-:: 1. Intel oneAPI kontrolü (SYCL/Arc GPU için şart)
-:: ─────────────────────────────────────────────────────
+rem ─────────────────────────────────────────────────────
+rem 1. Intel oneAPI kontrolu (SYCL/Arc GPU icin sart)
+rem ─────────────────────────────────────────────────────
 echo [1/5] Intel oneAPI kontrol ediliyor...
 if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
     call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force >nul 2>&1
@@ -30,9 +30,9 @@ if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
 )
 echo.
 
-:: ─────────────────────────────────────────────────────
-:: 2. Conda kontrolü
-:: ─────────────────────────────────────────────────────
+rem ─────────────────────────────────────────────────────
+rem 2. Conda kontrolu
+rem ─────────────────────────────────────────────────────
 echo [2/5] Conda kontrol ediliyor...
 where conda >nul 2>&1
 if %errorlevel% neq 0 (
@@ -44,9 +44,9 @@ if %errorlevel% neq 0 (
 echo [OK] Conda bulundu.
 echo.
 
-:: ─────────────────────────────────────────────────────
-:: 3. Conda ortamı
-:: ─────────────────────────────────────────────────────
+rem ─────────────────────────────────────────────────────
+rem 3. Conda ortami
+rem ─────────────────────────────────────────────────────
 echo [3/5] Conda ortami kontrol ediliyor...
 conda env list | findstr /C:"%ENV_NAME%" >nul 2>&1
 if %errorlevel% equ 0 (
@@ -63,9 +63,9 @@ if %errorlevel% neq 0 (
 )
 echo [OK] Ortam olusturuldu.
 
-:: ─────────────────────────────────────────────────────
-:: 4. Paket kurulumu
-:: ─────────────────────────────────────────────────────
+rem ─────────────────────────────────────────────────────
+rem 4. Paket kurulumu
+rem ─────────────────────────────────────────────────────
 :install_packages
 echo.
 echo [4/5] Paketler kuruluyor...
@@ -88,14 +88,14 @@ pip install llama-cpp-python --quiet
 echo.
 echo [OK] Paket kurulumu tamamlandi.
 
-:: ─────────────────────────────────────────────────────
-:: 5. llama-server kontrolü
-:: ─────────────────────────────────────────────────────
+rem ─────────────────────────────────────────────────────
+rem 5. llama-server kontrolu
+rem ─────────────────────────────────────────────────────
 echo.
 echo [5/5] llama-server kontrol ediliyor...
 if exist "%LLAMA_SERVER_DIR%\llama-server.exe" (
     echo [OK] llama-server bulundu: %LLAMA_SERVER_DIR%
-    :: GPU listesi
+    rem GPU listesi
     "%LLAMA_SERVER_DIR%\llama-ls-sycl-device.exe" 2>nul || echo [INFO] SYCL cihaz listesi alinamadi.
 ) else (
     echo [UYARI] llama-server bulunamadi: %LLAMA_SERVER_DIR%
@@ -109,9 +109,9 @@ if exist "%LLAMA_SERVER_DIR%\llama-server.exe" (
     echo         llama-server olmadan sadece OpenVINO ve Ollama backend kullanilabilir.
 )
 
-:: ─────────────────────────────────────────────────────
-:: Uygulamayı başlat
-:: ─────────────────────────────────────────────────────
+rem ─────────────────────────────────────────────────────
+rem Uygulamayi baslat
+rem ─────────────────────────────────────────────────────
 echo.
 echo ════════════════════════════════════════════════
 echo  Kurulum tamamlandi! Studio baslatiliyor...
@@ -125,7 +125,7 @@ python ui/app.py
 
 if %errorlevel% neq 0 (
     echo.
-    echo [HATA] Uygulama baslatılamadi.
+    echo [HATA] Uygulama baslatilamadi.
     echo        logs\ klasorunu kontrol edin.
 )
 pause

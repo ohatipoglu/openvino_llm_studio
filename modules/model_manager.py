@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 from core.config import OPENVINO_MODELS_DIR, CACHE_DIR
 
-OPENVINO_ROOT = OPENVINO_MODELS_DIR
+OPENVINO_ROOT = Path(OPENVINO_MODELS_DIR)
 
 # Model tipi tespiti için imzalar
 MODEL_TYPE_SIGNATURES = {
@@ -81,7 +81,7 @@ class ModelScanner:
     """C:\\OpenVINO_LLM altındaki tüm modelleri tarar."""
 
     def __init__(self, root: Path = OPENVINO_ROOT):
-        self.root = root
+        self.root = Path(root)
 
     def scan(self) -> list[ModelInfo]:
         if not self.root.exists():
@@ -89,16 +89,24 @@ class ModelScanner:
             return []
 
         models = []
+        # Taramaya dahil edilmeyecek sistem/uygulama klasörleri
+        ignore_dirs = {
+            ".idea", ".cache", ".git", "gguf", "llama-server", 
+            "ipex_ollama", "ipex_ollama_nightly", "openvino_llm_studio"
+        }
+
         # Her alt dizini tara
         for subdir in self.root.iterdir():
-            if not subdir.is_dir():
+            if not subdir.is_dir() or subdir.name in ignore_dirs or subdir.name.startswith("."):
                 continue
+                
             info = self._inspect_directory(subdir)
             if info:
                 models.append(info)
-                # Alt-alt dizinleri de tara (model içinde birden fazla variant)
+                
+            # Alt-alt dizinleri de tara (model içinde birden fazla variant)
             for subsubdir in subdir.iterdir():
-                if subsubdir.is_dir():
+                if subsubdir.is_dir() and not subsubdir.name.startswith("."):
                     info2 = self._inspect_directory(subsubdir, parent=subdir.name)
                     if info2:
                         models.append(info2)
@@ -115,6 +123,12 @@ class ModelScanner:
         ov_files = [f.name for f in files if f.suffix in (".xml", ".bin")]
         if not ov_files:
             return None
+
+        # Sadece 1-2 kb'lik rastgele xml dosyalarını (örneğin IDE kalıntıları) model sanmasını önlemek için 
+        # en az bir tane .bin (ağırlık) dosyası veya openvino_model.xml arıyoruz.
+        has_bin = any(f.endswith(".bin") for f in file_names)
+        if not has_bin and "openvino_model.xml" not in file_names:
+             return None
 
         # Config dosyasını oku
         config = {}
