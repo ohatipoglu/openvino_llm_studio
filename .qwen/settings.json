@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__pycharm__list_directory_tree",
+      "mcp__pycharm__read_file",
+      "mcp__pycharm__get_project_modules",
+      "mcp__pycharm__create_new_file",
+      "mcp__pycharm__get_file_text_by_path",
+      "mcp__pycharm__execute_run_configuration",
+      "mcp__pycharm__execute_terminal_command",
+      "mcp__pycharm__replace_text_in_file",
+      "mcp__pycharm__build_project",
+      "mcp__pycharm__search_text"
+    ]
+  },
+  "$version": 3
+}

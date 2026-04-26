@@ -4,7 +4,7 @@
 
 Intel Arc iGPU üzerinde yerel LLM çalıştırma ortamı.  
 **llama-server (SYCL/Arc GPU)** + **OpenVINO** + **Ollama** backend’lerini tek arayüzde sunar.  
-DuckDuckGo web araması, DSPy prompt zenginleştirme ve SQLite loglama dahildir.
+DuckDuckGo web araması, DSPy prompt zenginleştirme, **Otonom Ajan (ReAct)** özellikleri ve SQLite loglama dahildir.
 
 ---
 
@@ -12,6 +12,7 @@ DuckDuckGo web araması, DSPy prompt zenginleştirme ve SQLite loglama dahildir.
 
 ### Öne çıkanlar
 - **Tek UI, 3 backend**: OpenVINO / Ollama / llama-server (llama.cpp)
+- **Otonom YZ Ajanı (ReAct)**: Model kendi kendine fonksiyon çalıştırabilir (Tool Calling).
 - **Web araması**: DuckDuckGo + BM25 + semantik sıralama
 - **DSPy zenginleştirme**: otomatik mod seçimi + template
 - **Loglama**: `logs/studio.db` (SQLite)
@@ -66,9 +67,11 @@ openvino_llm_studio/
 ├── ui/
 │   └── app.py                    # Gradio arayüzü
 ├── core/
-│   └── orchestrator.py           # Backend koordinasyonu
+│   ├── orchestrator.py           # Backend ve Ajan (ReAct) koordinasyonu
+│   └── schema.py                 # Pydantic veri doğrulama modelleri
 ├── modules/
 │   ├── database.py               # SQLite loglama (SQLAlchemy)
+│   ├── tools.py                  # Ajanın kullanabileceği araçlar (Banka işlemleri vb.)
 │   ├── model_manager.py          # OpenVINO model tarama + yükleme
 │   ├── search_engine.py          # DuckDuckGo + BM25 + semantik sıralama
 │   ├── dspy_enricher.py          # DSPy prompt zenginleştirme
@@ -88,27 +91,15 @@ openvino_llm_studio/
          v
 [Orchestrator (core/orchestrator.py)]
          |
-         +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(LLM ile)--> [Arama Sorgusu Üretimi]
-         |                                                                       |
-         |                                                                       v
-         +-----------------------------------------> [WebSearcher (modules/search_engine.py)]
-         |                                                                       | (DuckDuckGo + Sıralama)
-         |                                                                       v
-         |<-------------------------------------------------------------- [Arama Sonuçları]
-         |
          +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(LLM ile)--> [Mod Seçimi & Prompt Şablonu]
          |                                                                       |
          |                                                                       v
          |<-------------------------------------------------------------- [Zenginleştirilmiş Prompt]
          |
          v
-[Aktif Backend'e Yönlendirme]
+[Otonom ReAct Döngüsü] <───────> [Araçlar (modules/tools.py)]
          |
-         +-----> [OpenVINO (modules/model_manager.py)]
-         |
-         +-----> [llama-server (modules/ipex_worker_client.py)]
-         |
-         +-----> [Ollama (modules/ipex_backend.py)]
+         +-----> [OpenVINO / llama-server / Ollama Backend]
          |
          v
 [LLM Yanıtı] -> [UI]
@@ -147,6 +138,7 @@ llama-server.exe --list-devices
 
 - **`unknown model architecture`**: `llama-server` çok eski olabilir. Güncel SYCL binary indir: `https://github.com/ggml-org/llama.cpp/releases`
 - **DuckDuckGo rate limit**: Biraz bekle veya bağımlılıkları güncelle (`ddgs`).
+- **DSPy Arama/Sınıflandırma Timeout**: İstekler çok uzun sürerse 15 saniyelik zaman aşımı devreye girer ve sistem kural-tabanlı (fallback) moda geçer. Bu özellik UI'ın donmasını engeller.
 
 ---
 
@@ -154,6 +146,7 @@ llama-server.exe --list-devices
 
 ### Highlights
 - **One UI, 3 backends**: OpenVINO / Ollama / llama-server (llama.cpp)
+- **Autonomous AI Agent (ReAct)**: Model can trigger functions itself (Tool Calling).
 - **Web search**: DuckDuckGo + BM25 + semantic reranking
 - **DSPy enrichment**: automatic mode selection + templates
 - **Logging**: `logs/studio.db` (SQLite)
@@ -209,27 +202,15 @@ run.bat
       v
 [Orchestrator (core/orchestrator.py)]
       |
-      +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(via LLM)--> [Search Query Generation]
-      |                                                                    |
-      |                                                                    v
-      +-----------------------------------------> [WebSearcher (modules/search_engine.py)]
-      |                                                                    | (DuckDuckGo + Reranking)
-      |                                                                    v
-      |<-------------------------------------------------------------- [Search Results]
-      |
       +-----> [DSPyEnricher (modules/dspy_enricher.py)] --(via LLM)--> [Mode Selection & Prompt Template]
       |                                                                    |
       |                                                                    v
       |<-------------------------------------------------------------- [Enriched Prompt]
       |
       v
-[Route to Active Backend]
+[Autonomous ReAct Loop] <───────> [Tools (modules/tools.py)]
       |
-      +-----> [OpenVINO (modules/model_manager.py)]
-      |
-      +-----> [llama-server (modules/ipex_worker_client.py)]
-      |
-      +-----> [Ollama (modules/ipex_backend.py)]
+      +-----> [OpenVINO / llama-server / Ollama Backend]
       |
       v
 [LLM Response] -> [UI]
