@@ -53,7 +53,13 @@ try:
             )
             return response_text
 
-        def __call__(self, prompt, only_completed=True, return_sorted=False, **kwargs):
+        def __call__(self, prompt=None, messages=None, **kwargs):
+            """Yeni DSPy versiyonları prompt yerine messages dict'i gönderebiliyor."""
+            if prompt is None and messages is not None:
+                # Gelen messages listesini düz metin formata dönüştür
+                prompt = "\n".join([f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}" for m in messages])
+            elif prompt is None:
+                prompt = ""
             return [self.basic_request(prompt, **kwargs)]
 
     class SearchQueryGeneration(dspy.Signature):
