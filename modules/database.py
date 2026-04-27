@@ -304,3 +304,84 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Stats hatası: {e}")
             return {}
+
+    # ---------- LOG QUERY HELPERS ----------
+    def get_search_logs(self, session_id: Optional[str] = None, limit: int = 500) -> list:
+        """Search loglarını döndürür."""
+        try:
+            with self._get_session() as session:
+                q = session.query(SearchLog)
+                if session_id:
+                    q = q.filter(SearchLog.session_id == session_id)
+                rows = q.order_by(SearchLog.timestamp.desc()).limit(limit).all()
+                return [
+                    {c.name: getattr(r, c.name) for c in SearchLog.__table__.columns}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"get_search_logs hatası: {e}")
+            return []
+
+    def get_dspy_logs(self, session_id: Optional[str] = None, limit: int = 500) -> list:
+        """DSPy loglarını döndürür."""
+        try:
+            with self._get_session() as session:
+                q = session.query(DSPyLog)
+                if session_id:
+                    q = q.filter(DSPyLog.session_id == session_id)
+                rows = q.order_by(DSPyLog.timestamp.desc()).limit(limit).all()
+                return [
+                    {c.name: getattr(r, c.name) for c in DSPyLog.__table__.columns}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"get_dspy_logs hatası: {e}")
+            return []
+
+    def get_llm_logs(self, session_id: Optional[str] = None, limit: int = 500) -> list:
+        """LLM loglarını döndürür."""
+        try:
+            with self._get_session() as session:
+                q = session.query(LLMLog)
+                if session_id:
+                    q = q.filter(LLMLog.session_id == session_id)
+                rows = q.order_by(LLMLog.timestamp.desc()).limit(limit).all()
+                return [
+                    {c.name: getattr(r, c.name) for c in LLMLog.__table__.columns}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"get_llm_logs hatası: {e}")
+            return []
+
+    def get_error_logs(self, session_id: Optional[str] = None, limit: int = 500) -> list:
+        """Hata loglarını döndürür."""
+        try:
+            with self._get_session() as session:
+                q = session.query(ErrorLog)
+                if session_id:
+                    q = q.filter(ErrorLog.session_id == session_id)
+                rows = q.order_by(ErrorLog.timestamp.desc()).limit(limit).all()
+                return [
+                    {c.name: getattr(r, c.name) for c in ErrorLog.__table__.columns}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"get_error_logs hatası: {e}")
+            return []
+
+    def get_general_logs(self, session_id: Optional[str] = None, limit: int = 500) -> list:
+        """Genel logları döndürür."""
+        try:
+            with self._get_session() as session:
+                q = session.query(GeneralLog)
+                if session_id:
+                    q = q.filter(GeneralLog.session_id == session_id)
+                rows = q.order_by(GeneralLog.timestamp.desc()).limit(limit).all()
+                return [
+                    {c.name: getattr(r, c.name) for c in GeneralLog.__table__.columns}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"get_general_logs hatası: {e}")
+            return []

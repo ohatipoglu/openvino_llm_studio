@@ -4,30 +4,25 @@ Centralized constants for the application.
 """
 
 class DSPyConfig:
-    CLASSIFY_TIMEOUT_S = 15
-    CLASSIFY_COOLDOWN_S = 30
-    SEARCH_QUERY_TIMEOUT_S = 10
-    CLASSIFY_MAX_TOKENS = 12
+    CLASSIFY_TIMEOUT_S = 45
+    CLASSIFY_COOLDOWN_S = 120
+    SEARCH_QUERY_TIMEOUT_S = 25
+    CLASSIFY_MAX_TOKENS = 20
     MAX_SEARCH_QUERIES = 3
-    CONFIDENCE_THRESHOLD_HIGH = 0.8
-    CONFIDENCE_THRESHOLD_LOW = 0.5
-    
-    MODES = {
-        "ChainOfThought": {"description": "Analitik sorular", "keywords": ["acikla", "analiz"]},
-        "ReAct": {"description": "Araç gerektiren", "keywords": ["transfer", "gonder"]},
-        "ProgramOfThought": {"description": "Kod/math", "keywords": ["hesapla", "kod"]},
-        "MultiChainComparison": {"description": "Karsilastirma", "keywords": ["karsilastir"]},
-        "Summarize": {"description": "Ozet", "keywords": ["ozetle"]},
-        "Predict": {"description": "Basit", "keywords": ["nedir"]},
-    }
+    CONFIDENCE_THRESHOLD_HIGH = 0.75
+    CONFIDENCE_THRESHOLD_LOW = 0.4
+    MODES = {}
 
 class SearchConfig:
     DEFAULT_NUM_RESULTS = 5
     BM25_WEIGHT = 0.3
     SEMANTIC_WEIGHT = 0.7
     MAX_CONTEXT_CHARS = 15000
-    JUNK_DOMAINS = {"sozluk.gov.tr", "nedemek.org"}
+    JUNK_DOMAINS = {}
     SEARCH_RATE_LIMIT = 10
+    SEARCH_RATE_LIMIT_WINDOW = 60.0
+    SEARCH_CANDIDATE_MULTIPLIER = 2
+    MAX_CONTEXT_RESULTS_MULTIPLIER = 1.5
 
 class ModelConfig:
     MIN_AVAILABLE_MEMORY_GB = 2.0
@@ -39,4 +34,4 @@ class BackendConfig:
     DEFAULT_TEMPERATURE = 0.7
     DEFAULT_MAX_TOKENS = 512
     DEFAULT_REPETITION_PENALTY = 1.1
-    COMMON_STOP_TOKENS = ["
+    COMMON_STOP_TOKENS = []

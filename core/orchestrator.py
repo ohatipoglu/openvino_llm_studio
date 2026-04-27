@@ -1,485 +1,445 @@
 """
 core/orchestrator.py
-Tüm modülleri koordine eden ana sınıf.
-Backend: OpenVINO | Ollama | LlamaCpp (GGUF/SYCL)
+====================
+Tüm sistemin (Arama, DSPy, Modeller ve Tool'lar) yönetimini sağlayan merkez birim.
 
-IPEX-LLM EOL Notu (Mart 2026):
-  ipex-llm ve ipex_worker.py TCP mimarisi kaldırıldı.
-  "ipex" backend artık LlamaCppBackend (GGUF) kullanır.
-  Intel Arc iGPU hızlandırma için:
-    a) Ollama backend + IPEX Ollama fork
-    b) LlamaCpp backend + SYCL derlemeli llama-cpp-python
+NOT: Bu sınıf artık stateless'tir. UI-bazlı state yönetimi için StateManager kullanın.
 """
 
-import uuid
+import json
 import logging
 import threading
-import json
-import re
-from typing import Optional, Generator
-from pathlib import Path
+import time
+from typing import Generator, Optional, Tuple
 
-from modules.database import DatabaseManager
-from modules.model_manager import ModelScanner, ModelLoader, ModelInfo
+from pydantic import ValidationError
+
+# -- Proje İçi Modüller --
 from modules.search_engine import WebSearcher
 from modules.dspy_enricher import DSPyEnricher
-from modules.ipex_backend import OllamaBackend, LlamaCppBackend, IPEXModelInfo
+from modules.model_manager import ModelScanner, ModelLoader
 from modules.ipex_worker_client import IPEXWorkerClient
-from modules.hf_catalog import HFModelCatalog, CatalogEntry
+from modules.ipex_backend import OllamaBackend
+from modules.database import DatabaseManager
 from modules.tools import ToolDispatcher
+from core.constants import SearchConfig
+from core.state_manager import get_state_manager, StateManager
 
 logger = logging.getLogger(__name__)
 
-JUNK_DOMAINS = {
-    "sozluk.gov.tr", "nedemek.org", "nedirnedemek.com",
-    "seslisozluk.net", "tureng.com", "bab.la", "reverso.net",
-    "turkdiliveedebiyati.com", "nedir.com", "anlami.net",
-}
-
 
 class Orchestrator:
-    BACKENDS = ("openvino", "ollama", "ipex")
-
-    def __init__(self):
-        self.session_id = str(uuid.uuid4())[:8]
-        self._lock = threading.Lock()
-        self._active_backend: str = "openvino"
-
-        logger.info("Orchestrator başlatılıyor...")
-        self.db      = DatabaseManager()
+    """
+    Stateless orchestrator.
+    UI-bazlı state yönetimi StateManager ile yapılır.
+    """
+    
+    def __init__(self, ui_id: str = "default"):
+        self.db = DatabaseManager()
+        self._lock = threading.RLock()
+        self.ui_id = ui_id
+        
+        # State manager'dan UI state'ini al
+        self._state_manager = get_state_manager()
+        
+        # Shared components (stateless)
         self.scanner = ModelScanner()
 
-        # Araç Yürütücü (Tool Dispatcher)
-        self.tool_dispatcher = ToolDispatcher()
-
-        # OpenVINO backend
+        # 3 Farklı Backend:
         self.ov_loader = ModelLoader(db_manager=self.db)
-
-        # Ollama backend (standart + IPEX fork destekli)
+        self.ipex = IPEXWorkerClient(db_manager=self.db)
         self.ollama = OllamaBackend(db_manager=self.db)
 
-        # llama-cpp-python backend (GGUF / SYCL)
-        # IPEXWorkerClient artık LlamaCppBackend'i sarmalar;
-        # ayrı conda env veya TCP socket gerektirmez.
-        self.ipex = IPEXWorkerClient(
-            conda_env  = "openvino_studio",  # artık kullanılmıyor, uyumluluk
-            port       = 62000,              # artık kullanılmıyor
-            db_manager = self.db,
-        )
-
+        # Arama ve DSPy
         self.searcher = WebSearcher(db_manager=self.db)
-        self.enricher = DSPyEnricher(db_manager=self.db, tool_dispatcher=self.tool_dispatcher)
-        self.catalog  = HFModelCatalog()
+        self.enricher = DSPyEnricher(db_manager=self.db)
 
-        self._ov_models: list = []
-        self._current_model_name: str = ""
-
-        self.db.log_general(self.session_id, "INFO", "Orchestrator",
-                            "Studio başlatıldı.", {"session": self.session_id})
-        logger.info(f"Orchestrator hazır. Session: {self.session_id}")
-
-    # ─────────────────────── Backend Yönetimi ────────────────────
-
+        # Otonom araç (ReAct Tool) yöneticisi
+        self.tool_dispatcher = ToolDispatcher()
+    
+    @property
+    def session_id(self) -> str:
+        """State manager'dan session_id al."""
+        return self._state_manager.get_session_id(self.ui_id)
+    
+    @property
+    def _active_backend(self) -> str:
+        """State manager'dan aktif backend'i al."""
+        return self._state_manager.get_backend(self.ui_id)
+    
     def set_backend(self, backend: str):
-        with self._lock:
-            if backend in self.BACKENDS:
-                self._active_backend = backend
-                logger.info(f"Backend değiştirildi: {backend}")
+        """UI için aktif backend'i ayarla."""
+        self._state_manager.set_backend(self.ui_id, backend)
+        logger.info(f"[{self.ui_id}] Backend değiştirildi: {backend}")
 
-    def get_backend_status(self) -> dict:
-        # Ollama durumu — IPEX fork mu standart mı?
-        ollama_ok = self.ollama.is_available()
-        if ollama_ok:
-            btype = self.ollama.detect_backend_type()
-            ollama_label = (
-                "✅ IPEX Ollama fork (iGPU hızlandırma aktif)"
-                if btype == "ipex_ollama"
-                else "✅ Standart Ollama"
-            )
-        else:
-            ollama_label = "❌ Çalışmıyor"
+    def new_session(self):
+        """Yeni session başlat."""
+        self._state_manager.new_session(self.ui_id)
+        self.searcher.clear_cache()
+        logger.info(f"[{self.ui_id}] Yeni session başlatıldı: {self.session_id}")
 
-        # llama-cpp-python durumu
-        lcpp = self.ipex._backend
-        if lcpp.is_available():
-            sycl = lcpp.check_sycl_support()
-            lcpp_label = (
-                f"✅ llama-cpp-python {'+ SYCL/XPU' if sycl else '(CPU only)'}"
-            )
-        else:
-            lcpp_label = "❌ llama-cpp-python kurulu değil"
+    # -------------------------------------------------------------
+    # Tool Parser (Ajan çıktılarını yorumlama)
+    # -------------------------------------------------------------
+    def _parse_action_from_response(self, response_text: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Model yanıtında Action ve Action Input kalıplarını arar.
+        Örn:
+        Action: transfer_money
+        Action Input: {"from_account": "...", "to_account": "...", "amount": 100}
+        """
+        action = None
+        action_input = None
 
-        return {
-            "openvino": "✅ Mevcut",
-            "ollama":   ollama_label,
-            "ipex":     lcpp_label,
-        }
+        # 1. Action bul
+        action_idx = response_text.find("Action:")
+        if action_idx != -1:
+            action_line = response_text[action_idx:].split('\n')[0]
+            action = action_line.replace("Action:", "").strip()
 
+        # 2. Action Input bul
+        input_idx = response_text.find("Action Input:")
+        if input_idx != -1:
+            input_line = response_text[input_idx:].split('\n')[0]
+            action_input = input_line.replace("Action Input:", "").strip()
+
+        return action, action_input
+
+    # -------------------------------------------------------------
+    # Backend Yönetimi
+    # -------------------------------------------------------------
     @property
     def _active_loader(self):
-        if self._active_backend == "ollama":
+        backend = self._active_backend
+        if backend == "ollama":
             return self.ollama
-        if self._active_backend == "ipex":
+        if backend == "ipex":
             return self.ipex
         return self.ov_loader
 
-    # ─────────────────────── Model Tarama ────────────────────────
+    # -------------------------------------------------------------
+    # Bilgi ve Durum
+    # -------------------------------------------------------------
+    @property
+    def is_model_loaded(self) -> bool:
+        return self._active_loader.is_loaded
 
-    def scan_models(self) -> list:
-        with self._lock:
-            backend = self._active_backend
+    def get_model_choices(self) -> list:
+        """Arayüzde gösterilecek model listesi (backend'e göre)."""
+        backend = self._active_backend
 
         try:
             if backend == "openvino":
-                ov_models = self.scanner.scan()
-                with self._lock:
-                    self._ov_models = ov_models
-                self.db.log_general(self.session_id, "INFO", "Orchestrator",
-                                    f"{len(ov_models)} OpenVINO modeli tarandı.")
-                return ov_models
+                # Model cache'i state manager'dan al
+                cached_models = self._state_manager.get_model_cache(self.ui_id)
+                if cached_models:
+                    choices = [f"{m.name}  ({m.precision})" for m in cached_models]
+                    if choices:
+                        return choices
+                
+                # Cache yoksa tara
+                self.scanner = ModelScanner()
+                models = self.scanner.scan()
+                self._state_manager.set_model_cache(self.ui_id, models)
+                choices = [f"{m.name}  ({m.precision})" for m in models]
+                if not choices:
+                    choices = ["OpenVINO modeli bulunamadı"]
+                return choices
 
-            elif backend == "ollama":
-                models = self.ollama.list_models()
-                self.db.log_general(self.session_id, "INFO", "Orchestrator",
-                                    f"{len(models)} Ollama modeli listelendi.")
-                return models
+            if backend == "ollama":
+                try:
+                    import requests
+                    r = requests.get(f"{self.ollama.base_url}/api/tags", timeout=5)
+                    if r.status_code == 200:
+                        models = r.json().get("models", [])
+                        return [m["name"] for m in models] if models else ["Ollama modeli bulunamadı"]
+                except Exception as e:
+                    logger.error(f"Ollama tag okuma hatası: {e}")
+                return ["Ollama'ya bağlanılamadı"]
 
-            elif backend == "ipex":
-                return self._scan_ipex_local()
+            if backend == "ipex":
+                local_ggufs = self.ipex.scan_local_gguf()
+                return local_ggufs if local_ggufs else ["Yerel GGUF bulunamadı"]
 
         except Exception as e:
-            logger.error(f"Model tarama hatası: {e}")
-            self.db.log_error(self.session_id, "Orchestrator.scan_models", e)
+            logger.error(f"get_model_choices hatası: {e}")
         return []
 
-    def get_model_choices(self) -> list[str]:
-        # Lock ekleyerek active_backend'in değişmesini engelliyoruz
-        with self._lock:
-            backend = self._active_backend
+    def get_backend_status(self) -> dict:
+        """Tüm backend'lerin durumunu döndür."""
+        ov_loaded = self.ov_loader.is_loaded
         
-        # O anki backend ile scan yap (lock dışında, uzun sürebilir)
+        ipex_stat = self.ipex.get_status()
+        ipex_avail = ipex_stat.get("result", {}).get("xpu_available", False)
+        ipex_loaded = ipex_stat.get("result", {}).get("loaded", False)
+        
+        ollama_ok = False
+        ollama_loaded = False
         try:
-            if backend == "openvino":
-                models = self.scanner.scan()
-                with self._lock:
-                    self._ov_models = models
-            elif backend == "ollama":
-                models = self.ollama.list_models()
-            elif backend == "ipex":
-                models = self._scan_ipex_local()
-            else:
-                models = []
-        except Exception as e:
-            logger.error(f"Model tarama hatası: {e}")
-            models = []
+            import requests
+            r = requests.get(f"{self.ollama.base_url}/api/tags", timeout=2)
+            if r.status_code == 200:
+                ollama_ok = True
+                ollama_loaded = self.ollama.is_loaded
+        except:
+            pass
+        
+        return {
+            "openvino": "Yüklü ✅" if ov_loaded else "Hazır ✅",
+            "ipex": "Yüklü ✅" if ipex_loaded else ("Hazır ✅" if ipex_avail else "SYCL Yok ❌"),
+            "ollama": "Yüklü ✅" if ollama_loaded else ("Hazır ✅" if ollama_ok else "Çevrimdışı ❌")
+        }
+
+    def get_system_status(self) -> dict:
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            cpu = psutil.cpu_percent()
+        except:
+            mem = None
+            cpu = 0
+        
+        active_loader = self._active_loader
+        return {
+            "model_loaded": active_loader.is_loaded,
+            "model_name": active_loader.loaded_model_name if active_loader.is_loaded else "",
+            "backend": self._active_backend,
+            "ram_percent": mem.percent if mem else 0,
+            "cpu_percent": cpu
+        }
+
+    # -------------------------------------------------------------
+    # Yükleme (Load)
+    # -------------------------------------------------------------
+    def load_model(self, display_name: str, device: str = "CPU",
+                   ov_config: dict = None) -> tuple[bool, str]:
+        backend = self._active_backend
 
         if backend == "openvino":
-            if not models:
-                return []
-            return [f"{m.name} [{m.model_type.upper()}] ({m.size_mb:.0f} MB)"
-                    for m in models]
-
+            return self._load_ov(display_name, device, ov_config)
         elif backend == "ollama":
-            if not models:
-                return []
-            return [f"{m.model_id} ({m.size_gb:.1f} GB)" for m in models]
-
+            return self._load_ollama(display_name)
         elif backend == "ipex":
-            if not models:
-                return ["⚠️ GGUF model yok — Model Galerisi'nden indirin"]
-            return [f"{m.name}  ({m.size_gb:.1f} GB)  —  {m.model_id}" for m in models]
+            return self._load_ipex(display_name, device)
+        return False, "Geçersiz backend"
 
-        return []
-
-    # ─────────────────────── Model Yükleme ───────────────────────
-
-    def load_model(self, model_display_name: str, device: str = "CPU",
-                   ov_config: dict = None) -> tuple[bool, str]:
-        with self._lock:
-            backend = self._active_backend
-
-        try:
-            if backend == "openvino":
-                return self._load_openvino(model_display_name, device, ov_config=ov_config)
-            elif backend == "ollama":
-                return self._load_ollama(model_display_name)
-            elif backend == "ipex":
-                return self._load_ipex(model_display_name, device)
-            return False, "Bilinmeyen backend."
-        except Exception as e:
-            self.db.log_error(self.session_id, "Orchestrator.load_model", e)
-            return False, f"Model yükleme hatası: {e}"
-
-    def _load_openvino(self, display_name: str, device: str,
+    def _load_ov(self, display_name: str, device: str = "CPU",
                        ov_config: dict = None) -> tuple[bool, str]:
-        if not self._ov_models:
-            self._ov_models = self.scanner.scan()
-        model_info = next((m for m in self._ov_models if m.name in display_name), None)
+        # Model cache'i state manager'dan al
+        cached_models = self._state_manager.get_model_cache(self.ui_id)
+        if not cached_models:
+            self.scanner = ModelScanner()
+            cached_models = self.scanner.scan()
+            self._state_manager.set_model_cache(self.ui_id, cached_models)
+        
+        model_info = next((m for m in cached_models if display_name.startswith(m.name + " [")), None)
         if not model_info:
             return False, f"OpenVINO modeli bulunamadı: {display_name}"
         success, msg = self.ov_loader.load(
-            model_info.path, device=device,
-            session_id=self.session_id,
-            ov_config=ov_config,
+            model_info.path,
+            device=device,
+            config=ov_config
         )
         if success:
-            with self._lock:
-                self._current_model_name = model_info.name
-            self.db.log_session(self.session_id, model_info.name, model_info.model_type)
             self.enricher.set_loader(self.ov_loader)
-            self.enricher.configure_lm(model_info.path, device)
         return success, msg
 
-    def _load_ollama(self, display_name: str) -> tuple[bool, str]:
-        model_id = display_name.split(" (")[0].strip()
-        success, msg = self.ollama.load(model_id, session_id=self.session_id)
+    def _load_ollama(self, model_name: str) -> tuple[bool, str]:
+        try:
+            import requests
+            r = requests.post(
+                f"{self.ollama.base_url}/api/generate",
+                json={"model": model_name, "keep_alive": -1},
+                timeout=30
+            )
+            if r.status_code == 200:
+                self.ollama._current_model = model_name
+                self.enricher.set_loader(self.ollama)
+                return True, f"Ollama: '{model_name}' bellekte tutuluyor."
+        except Exception as e:
+            return False, f"Ollama yükleme hatası: {e}"
+        return False, "Bilinmeyen Ollama hatası."
+
+    def _load_ipex(self, model_path: str, device: str) -> tuple[bool, str]:
+        # 'AUTO' cihazını algıla
+        if device.upper() == "AUTO":
+            device = "xpu" if self.ipex._backend.check_sycl_support() else "cpu"
+        elif device.upper() == "GPU":
+            device = "xpu"
+            
+        success, msg = self.ipex.load(
+            model_id=model_path,
+            device=device,
+            session_id=self.session_id,
+            n_ctx=4096
+        )
         if success:
-            with self._lock:
-                self._current_model_name = f"ollama/{model_id}"
-            self.db.log_session(self.session_id, model_id, "ollama")
-            self.enricher.set_loader(self.ollama)
-            self.enricher.configure_lm(model_id)
-        return success, msg
-
-    def _load_ipex(self, display_name: str, device: str) -> tuple[bool, str]:
-        """
-        GGUF model yükle.
-        Format: "[GGUF] model-adı  (X.X GB)  —  /tam/yol/model.gguf"
-        """
-        if display_name.startswith("⚠️"):
-            return False, "Önce Model Galerisi'nden veya HuggingFace'den bir .gguf modeli indirin."
-
-        # Model yolunu çıkar
-        if "—" in display_name:
-            model_path = display_name.split("—")[-1].strip()
-        else:
-            model_path = display_name.strip()
-
-        # Cihaz dönüşümü: UI "GPU"/"AUTO" → "xpu"
-        ipex_device = "xpu" if device.upper() in ("GPU", "AUTO") else "cpu"
-
-        success, msg = self.ipex.load(model_path, device=ipex_device,
-                                      session_id=self.session_id)
-        if success:
-            with self._lock:
-                self._current_model_name = f"llamacpp/{Path(model_path).stem}"
-            self.db.log_session(self.session_id, Path(model_path).stem, "llamacpp")
             self.enricher.set_loader(self.ipex)
-            self.enricher.configure_lm(model_path)
         return success, msg
 
-    # ─────────────────────── Yerel Model Tarama ──────────────────
+    # -------------------------------------------------------------
+    # Veritabanı
+    # -------------------------------------------------------------
+    def get_logs(self, session_only: bool = True) -> dict:
+        sess = self.session_id if session_only else None
+        return {
+            "search": self.db.get_search_logs(sess),
+            "dspy": self.db.get_dspy_logs(sess),
+            "llm": self.db.get_llm_logs(sess),
+            "errors": self.db.get_error_logs(sess),
+            "general": self.db.get_general_logs(sess),
+        }
 
-    def _scan_ipex_local(self) -> list:
-        """
-        Yerel GGUF dosyalarını tara (LlamaCppBackend aracılığıyla).
-        C:\\OpenVINO_LLM\\gguf\\ ve diğer tanımlı dizinlerde arar.
-        """
-        return self.ipex.scan_local_gguf()
+    def clear_logs(self, log_type: str = "all") -> bool:
+        return self.db.clear_logs(log_type)
 
-    # ─────────────────────── Katalog İşlemleri ───────────────────
+    # -------------------------------------------------------------
+    # Model Katalogları
+    # -------------------------------------------------------------
+    def get_openvino_catalog(self, search: str = "", force: bool = False) -> list:
+        """HuggingFace'den OpenVINO model kataloğunu döndürür."""
+        from modules.hf_catalog import HFModelCatalog
+        catalog = HFModelCatalog()
+        if force:
+            catalog.invalidate_cache("openvino")
+        return catalog.get_openvino_models(search=search)
 
-    def get_openvino_catalog(self, search: str = "",
-                             force_refresh: bool = False) -> list[CatalogEntry]:
-        """HF'den canlı OpenVINO model listesi — yerel olanları işaretle."""
-        try:
-            entries = self.catalog.get_openvino_models(
-                search=search, limit=80, force_refresh=force_refresh
-            )
-        except Exception as e:
-            logger.error(f"OpenVINO katalog çekme hatası: {e}", exc_info=True)
-            entries = []
+    def get_ollama_catalog(self, search: str = "", force: bool = False) -> list:
+        """Ollama model kataloğunu döndürür (HF + fallback)."""
+        from modules.hf_catalog import HFModelCatalog
+        catalog = HFModelCatalog()
+        if force:
+            catalog.invalidate_cache("ollama")
+        return catalog.get_ollama_models(search=search)
 
-        # Yerel tarama: C:\OpenVINO_LLM\ altındaki model klasörleri
-        local_models = self.scanner.scan()
-        tag_label    = "✅ İndirildi"
+    def get_ipex_catalog(self, search: str = "", force: bool = False) -> list:
+        """GGUF model kataloğunu döndürür (llama-cpp-python için)."""
+        from modules.hf_catalog import HFModelCatalog
+        catalog = HFModelCatalog()
+        if force:
+            catalog.invalidate_cache("gguf")
+        return catalog.get_gguf_models(search=search)
 
-        for e in entries:
-            model_name = e.model_id.split("/")[-1].lower()
-            is_local   = any(model_name in m.path.lower() for m in local_models)
-            if is_local:
-                e.tags = [tag_label] + [t for t in e.tags if t != tag_label]
-            else:
-                e.tags = [t for t in e.tags if t != tag_label]
-        return entries
+    def get_hf_gguf_catalog(self) -> list:
+        """HuggingFace'den GGUF modelleri katalogunu döndürür (legacy)."""
+        from modules.hf_catalog import HFModelCatalog
+        catalog = HFModelCatalog()
+        return catalog.get_gguf_models()
 
-    def get_ipex_catalog(self, search: str = "",
-                         force_refresh: bool = False) -> list[CatalogEntry]:
-        """
-        GGUF model kataloğu.
+    # -------------------------------------------------------------
+    # İstatistikler ve Durum
+    # -------------------------------------------------------------
+    def get_stats(self) -> dict:
+        """Sistem istatistikleri ve durum bilgilerini döndürür."""
+        import psutil
+        
+        mem = psutil.virtual_memory()
+        backend_status = self.get_backend_status()
+        
+        return {
+            "session_id": self.session_id,
+            "active_backend": self._active_backend,
+            "model_loaded": self.is_model_loaded,
+            "backend_status": backend_status,
+            "total_gb": round(mem.total / 1024**3, 1),
+            "used_gb": round(mem.used / 1024**3, 1),
+            "available_gb": round(mem.available / 1024**3, 1),
+            "percent": mem.percent,
+            "total_searches": self.db.get_stats().get("total_searches", 0),
+            "total_llm_calls": self.db.get_stats().get("total_llm_calls", 0),
+            "total_dspy_calls": self.db.get_stats().get("total_dspy_calls", 0),
+            "total_errors": self.db.get_stats().get("total_errors", 0),
+            "db_size_mb": self.db.get_stats().get("db_size_mb", 0),
+        }
 
-        Yerel GGUF dosyalarını + HF'den GGUF model listesini döndürür.
-        HF'deki GGUF modeller catalog.get_gguf_models() ile çekilir;
-        yoksa fallback statik liste kullanılır.
-        """
-        try:
-            entries = self.catalog.get_gguf_models(
-                search=search, limit=60, force_refresh=force_refresh
-            )
-        except Exception as e:
-            logger.error(f"GGUF katalog çekme hatası: {e}", exc_info=True)
-            entries = []
+    def pull_ollama_model(self, model_id: str) -> tuple[bool, str]:
+        """Ollama'ya model indirir."""
+        return self.ollama.pull_model(model_id)
 
-        # Yerel GGUF dosyaları
-        try:
-            local_gguf = {m.model_id for m in self._scan_ipex_local()}
-        except Exception as e:
-            logger.error(f"Yerel GGUF taranırken hata: {e}")
-            local_gguf = set()
-
-        tag_label = "✅ İndirildi"
-        for e in entries:
-            is_local = (e.model_id in local_gguf or
-                        Path(e.model_id).name in {Path(p).name for p in local_gguf})
-            if is_local:
-                e.tags = [tag_label] + [t for t in e.tags if t != tag_label]
-            else:
-                e.tags = [t for t in e.tags if t != tag_label]
-        return entries
-
-    def get_ollama_catalog(self, search: str = "",
-                           force_refresh: bool = False) -> list[CatalogEntry]:
-        """Ollama + HF'den birleşik katalog; yüklü modelleri işaretle."""
-        try:
-            entries = self.catalog.get_ollama_models(
-                search=search, limit=60, force_refresh=force_refresh
-            )
-        except Exception as e:
-            logger.error(f"Ollama katalog çekme hatası: {e}", exc_info=True)
-            entries = []
-
-        try:
-            installed_ids = {m.model_id for m in self.ollama.list_models()}
-        except Exception as e:
-            logger.error(f"Ollama yerel modeller listelenirken hata: {e}")
-            installed_ids = set()
-
-        for e in entries:
-            e.tags = (
-                ["✅ Yüklü"] + [t for t in e.tags if t != "✅ Yüklü"]
-                if e.model_id in installed_ids else
-                [t for t in e.tags if t != "✅ Yüklü"]
-            )
-        return entries
-
-    # ─────────────────────── İndirme İşlemleri ───────────────────
-
-    def download_openvino_model(self, model_id: str,
-                                dest_dir: str = r"C:\OpenVINO_LLM") -> tuple[bool, str]:
-        """HF'den OpenVINO modelini belirtilen dizine indir."""
+    def download_openvino_model(self, model_id: str, dest_dir: str) -> tuple[bool, str]:
+        """HuggingFace'den OpenVINO model indirir."""
         try:
             from huggingface_hub import snapshot_download
             import os
-            local_name = model_id.replace("/", "--")
-            target = os.path.join(dest_dir, local_name)
-            path = snapshot_download(repo_id=model_id, local_dir=target,
-                                     local_files_only=False)
-            return True, f"✅ İndirildi: {path}"
+            
+            os.makedirs(dest_dir, exist_ok=True)
+            logger.info(f"OpenVINO modeli indiriliyor: {model_id} → {dest_dir}")
+            
+            path = snapshot_download(
+                repo_id=model_id,
+                local_dir=dest_dir,
+                local_dir_use_symlinks=False,
+            )
+            return True, f"İndirme tamamlandı: {path}"
         except Exception as e:
-            return False, f"❌ İndirme hatası: {e}"
+            logger.error(f"OpenVINO indirme hatası: {e}")
+            return False, f"Hata: {e}"
 
     def download_gguf_model(self, model_id: str,
                             filename: str = "",
-                            dest_dir: str = r"C:\OpenVINO_LLM\gguf") -> tuple[bool, str]:
+                            dest_dir: str = r"C:\OpenVINO_LLM\gguf",
+                            quant_hint: str = "") -> tuple[bool, str]:
         """
         HF'den GGUF dosyasını indir.
 
-        model_id:  HF repo id (örn. "Qwen/Qwen2.5-7B-Instruct-GGUF")
-        filename:  Repo içindeki .gguf dosya adı (boş bırakılırsa en küçük q4 dosyası seçilir)
-        dest_dir:  Yerel hedef dizin
+        model_id:   HF repo id (örn. "Qwen/Qwen2.5-7B-Instruct-GGUF")
+        filename:   Repo içindeki .gguf dosya adı (boş bırakılırsa otomatik seçilir)
+        dest_dir:   Yerel hedef dizin
+        quant_hint: Tercih edilen quant türü, örn. "Q8_0", "Q4_K_M" (boş = otomatik)
         """
         try:
             from huggingface_hub import hf_hub_download, list_repo_files
             import os
-
+            
             os.makedirs(dest_dir, exist_ok=True)
-
-            # Dosya adı belirtilmemişse akıllı seçim
+            logger.info(f"GGUF aranıyor: {model_id}...")
+            
             if not filename:
-                all_files = list(list_repo_files(model_id))
-                gguf_files = [f for f in all_files if f.endswith(".gguf")]
+                files = list_repo_files(model_id)
+                gguf_files = [f for f in files if f.endswith(".gguf")]
                 if not gguf_files:
                     return False, f"'{model_id}' repo'sunda .gguf dosyası bulunamadı."
 
-                # Tercih sırası: Q4_K_M > Q4_K_S > Q4_0 > diğerleri
-                preferred = ["q4_k_m", "q4_k_s", "q4_0", "q5_k_m", "q8_0"]
-                selected  = None
-                for pref in preferred:
-                    match = next((f for f in gguf_files if pref in f.lower()), None)
-                    if match:
-                        selected = match
-                        break
-                filename = selected or gguf_files[0]
+                # quant_hint verilmişse önce onu dene
+                if quant_hint and quant_hint.lower() != "otomatik":
+                    hint_lower = quant_hint.lower()
+                    hint_match = next((f for f in gguf_files if hint_lower in f.lower()), None)
+                    if hint_match:
+                        filename = hint_match
+                        logger.info(f"GGUF quant hint uygulandı: {filename}")
+
+                # hint yoksa veya bulunamadıysa varsayılan tercih sırası
+                if not filename:
+                    preferred = ["q4_k_m", "q4_k_s", "q4_0", "q5_k_m", "q8_0"]
+                    selected  = None
+                    for pref in preferred:
+                        match = next((f for f in gguf_files if pref in f.lower()), None)
+                        if match:
+                            selected = match
+                            break
+                    filename = selected or gguf_files[0]
                 logger.info(f"GGUF dosyası seçildi: {filename}")
 
             path = hf_hub_download(
                 repo_id=model_id,
                 filename=filename,
                 local_dir=dest_dir,
+                local_dir_use_symlinks=False
             )
-            return True, f"✅ İndirildi: {path}"
-
+            return True, f"İndirme tamamlandı: {path}"
         except Exception as e:
-            return False, f"❌ GGUF indirme hatası: {e}"
+            logger.error(f"GGUF indirme hatası: {e}")
+            return False, f"Hata: {e}"
 
-    def download_ipex_model(self, model_id: str) -> tuple[bool, str]:
-        """Geriye uyumluluk — download_gguf_model'e yönlendirir."""
-        # GGUF formatına yönlendir
-        gguf_repo = model_id
-        if not gguf_repo.endswith("-GGUF"):
-            # Bilinen GGUF reposu adlandırma kurallarını dene
-            org, name = (gguf_repo.split("/") + [""])[:2]
-            possible_repos = [
-                f"{org}/{name}-GGUF",
-                f"bartowski/{name}-GGUF",
-                f"TheBloke/{name}-GGUF",
-            ]
-        else:
-            possible_repos = [gguf_repo]
-
-        for repo in possible_repos:
-            ok, msg = self.download_gguf_model(repo)
-            if ok:
-                return ok, msg
-
-        # Son çare: klasik HF snapshot (büyük, önerilmez)
-        return False, (
-            f"'{model_id}' için GGUF repo bulunamadı.\n"
-            "Lütfen HuggingFace'den doğru GGUF repo adını girin.\n"
-            "Örnek: Qwen/Qwen2.5-7B-Instruct-GGUF"
-        )
-
-    def pull_ollama_model(self, model_id: str) -> tuple[bool, str]:
-        return self.ollama.pull_model(model_id)
-
-    def invalidate_catalog_cache(self, source: str = None):
-        self.catalog.invalidate_cache(source)
-
-    # ─────────────────────── Pipeline ────────────────────────────
-
-    def _parse_action_from_response(self, response_text: str) -> tuple[Optional[str], Optional[str]]:
-        """ReAct formatındaki Action ve Action Input değerlerini çıkarır."""
-        action_match = re.search(r"Action:\s*(.+)", response_text)
-        input_match = re.search(r"Action Input:\s*(.+)", response_text, re.DOTALL)
-        
-        if action_match and input_match:
-            action = action_match.group(1).strip()
-            # Action Input sonrasında gelen extra yazıları veya observation kısmını kırp
-            raw_input = input_match.group(1).strip()
-            # Basit bir JSON parse denemesi
-            try:
-                # Sadece ilk süslü parantez bloğunu al
-                json_str = raw_input[raw_input.find("{") : raw_input.rfind("}")+1]
-                return action, json_str
-            except Exception:
-                return action, raw_input
-        return None, None
-
+    # -------------------------------------------------------------
+    # Yürütme (Streaming Pipeline)
+    # -------------------------------------------------------------
     def run_pipeline(self, prompt: str, params: dict,
                      enable_search: bool = True,
                      enable_dspy: bool = True,
                      num_search_results: int = 5,
-                     system_prompt: str = "") -> Generator[str, None, None]:
+                     system_prompt: str = "",
+                     history: list = None) -> Generator[str, None, None]:
 
         loader = self._active_loader
         if not loader.is_loaded:
@@ -529,7 +489,7 @@ class Orchestrator:
                     
                     # Sonuçları ilgi puanına (relevance_score) göre sıralayıp filtrele
                     for r in sorted(all_results, key=lambda x: x.relevance_score, reverse=True):
-                        if r.url not in unique_urls and not any(d in r.url for d in JUNK_DOMAINS):
+                        if r.url not in unique_urls and not any(d in r.url for d in SearchConfig.JUNK_DOMAINS):
                             unique_urls.add(r.url)
                             final_results.append(r)
                             
@@ -583,105 +543,39 @@ class Orchestrator:
                     f"generate() çağrılıyor — backend={self._active_backend}, "
                     f"prompt_len={len(final_prompt)}, params={params}"
                 )
-                
-                # ReAct Döngüsü
-                max_iterations = 3
-                current_iteration = 0
-                current_prompt = final_prompt
-                final_response = ""
-                
-                while current_iteration < max_iterations:
+
+                # Ollama için non-streaming generate kullan (streaming sorunlu)
+                if self._active_backend == "ollama":
                     response, metrics = loader.generate(
-                        prompt=current_prompt, params=params,
-                        session_id=self.session_id, raw_prompt=prompt,
+                        prompt=final_prompt,
+                        params=params,
+                        session_id=self.session_id,
                         system_prompt=system_prompt,
+                        history=history,
                     )
-                    
-                    if metrics.get("error"):
-                        err = metrics["error"]
-                        logger.error(f"Generate metrics error: {err}")
-                        self.db.log_error(self.session_id, "Pipeline.generate_metric", Exception(err))
-                        yield f"❌ Model hatası: {err}"
-                        return
-
-                    if not is_react_mode:
-                        # Normal üretim bitti
-                        final_response = response
-                        break
-                        
-                    # ReAct modundaysak Tool (Araç) çağırma var mı kontrol et
-                    action, action_input = self._parse_action_from_response(response)
-                    
-                    if action and action_input:
-                        yield f"\n🛠️ **Araç Çağrılıyor:** `{action}`\n"
-                        yield f"📦 **Parametreler:** `{action_input}`\n"
-                        
-                        # Aracı çalıştır
-                        observation = self.tool_dispatcher.execute(action, action_input)
-                        yield f"👁️ **Sonuç:** {observation}\n\n"
-                        
-                        # Modele yeni prompt oluştur (eski konuşma + observation eklenecek)
-                        # Not: Normalde Chat geçmişi olarak eklenmesi daha iyidir ancak
-                        # basitlik için prompta append ediyoruz.
-                        current_prompt += f"\n\nModel Yanıtı:\n{response}\n\nGözlem (Observation):\n{observation}\n\nLütfen gözlemi değerlendirerek nihai cevabı ver (Eğer işlem bittiyse 'Action' KULLANMA):"
-                        current_iteration += 1
-                        yield f"🔄 Ajan durumu değerlendiriyor (Adım {current_iteration}/{max_iterations})...\n"
-                        
+                    if response:
+                        yield response
                     else:
-                        # Aksiyon yoksa süreç tamamlandı
-                        final_response = response
-                        break
+                        yield f"❌ Hata: {metrics.get('error', 'Bilinmeyen hata')}"
+                else:
+                    # OpenVINO ve IPEX için streaming
+                    response = ""
+                    for token in loader.generate_stream(
+                        prompt=final_prompt, params=params,
+                        system_prompt=system_prompt,
+                        history=history,
+                    ):
+                        response += token
+                        yield token
 
-                yield "---\n"
-                yield final_response
-                tps = metrics.get("tokens_per_second", "?")
-                dur = metrics.get("duration_ms", 0)
-                tok = metrics.get("output_tokens", "?")
-                try:
-                    dur_fmt = f"{float(dur):.0f}ms"
-                except Exception:
-                    dur_fmt = str(dur)
-                yield (f"\n\n---\n📊 *{tok} token | {tps} tok/s | "
-                       f"{dur_fmt} | {self._active_backend}*")
+                yield "\n---\n"
 
             except Exception as e:
-                logger.error(f"Generate hatası: {e}", exc_info=True)
+                logger.error(f"Üretim hatası: {e}")
                 self.db.log_error(self.session_id, "Pipeline.generate", e)
-                yield f"\n❌ Model hatası: {type(e).__name__}: {e}"
+                yield f"❌ Hata: {e}"
 
         except Exception as e:
-            logger.error(f"Pipeline genel hata: {e}")
-            self.db.log_error(self.session_id, "Pipeline.general", e,
-                              {"prompt": prompt[:200]})
-            yield f"\n❌ Beklenmeyen hata: {e}"
-
-    # ─────────────────────── Yardımcılar ─────────────────────────
-
-    def get_logs(self, session_only: bool = False) -> dict:
-        return self.db.get_all_logs(
-            session_id=self.session_id if session_only else None
-        )
-
-    def clear_logs(self, table: str = "all") -> bool:
-        return self.db.clear_logs(table)
-
-    def get_stats(self) -> dict:
-        loader = self._active_loader
-        stats  = self.db.get_stats()
-        if hasattr(loader, "get_memory_info"):
-            stats.update(loader.get_memory_info())
-        stats["session_id"]     = self.session_id
-        stats["active_backend"] = self._active_backend
-        stats["model_loaded"]   = loader.loaded_model_name
-        stats["backend_status"] = self.get_backend_status()
-        return stats
-
-    def new_session(self):
-        with self._lock:
-            self.session_id = str(uuid.uuid4())[:8]
-        self.db.log_general(self.session_id, "INFO", "Orchestrator",
-                            "Yeni session başlatıldı.")
-
-    @property
-    def is_model_loaded(self) -> bool:
-        return self._active_loader.is_loaded
+            logger.error(f"Pipeline ana hatası: {e}")
+            self.db.log_error(self.session_id, "Pipeline.main", e)
+            yield f"❌ Beklenmeyen Hata: {e}"

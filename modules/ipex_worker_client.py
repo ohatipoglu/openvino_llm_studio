@@ -194,7 +194,8 @@ class IPEXWorkerClient:
 
     def generate(self, prompt: str, params: dict,
                  session_id: str = "", raw_prompt: str = "",
-                 system_prompt: str = "") -> tuple[str, dict]:
+                 system_prompt: str = "",
+                 history: list = None) -> tuple[str, dict]:
         """Metin üret."""
         if not self.is_loaded:
             return "", {"error": "Model yüklü değil."}
@@ -202,13 +203,31 @@ class IPEXWorkerClient:
             return self._server_backend.generate(
                 prompt=prompt, params=params,
                 session_id=session_id, raw_prompt=raw_prompt,
-                system_prompt=system_prompt,
+                system_prompt=system_prompt, history=history,
             )
         return self._backend.generate(
             prompt=prompt, params=params,
             session_id=session_id, raw_prompt=raw_prompt,
-            system_prompt=system_prompt,
+            system_prompt=system_prompt, history=history,
         )
+
+    def generate_stream(self, prompt: str, params: dict,
+                        system_prompt: str = "",
+                        history: list = None):
+        """Streaming token üretimi."""
+        if not self.is_loaded:
+            yield ""
+            return
+        if self._use_llama_server and self._server_backend and self._server_backend.is_loaded:
+            yield from self._server_backend.generate_stream(
+                prompt=prompt, params=params,
+                system_prompt=system_prompt, history=history
+            )
+        else:
+            yield from self._backend.generate_stream(
+                prompt=prompt, params=params,
+                system_prompt=system_prompt, history=history
+            )
 
     def generate_raw(self, prompt: str, params: dict) -> tuple[str, dict]:
         """Ham prompt ile üretim (DSPy sınıflandırması için)."""

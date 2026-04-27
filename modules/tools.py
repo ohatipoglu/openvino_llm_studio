@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -9,17 +10,18 @@ logger = logging.getLogger(__name__)
 # Bankacılık simülasyonu için durum (state) koruyan InMemory Veritabanı
 class InMemoryBankDB:
     def __init__(self):
+        self._lock = threading.RLock()
         self.accounts = {
-            "TR1234567890": {"balance": 15000.0, "owner": "Ahmet Yılmaz"},
-            "TR0987654321": {"balance": 250.0, "owner": "Ayşe Demir"}
+            "TR1234567890": {"balance": 15000.0, "owner": "Demo Kullanıcı 1"},
+            "TR0987654321": {"balance": 250.0,   "owner": "Demo Kullanıcı 2"},
         }
         self.cards = {
-            "CARD_1": {"limit": 5000.0, "status": "ACTIVE"},
-            "CARD_2": {"limit": 10000.0, "status": "FROZEN"}
+            "CARD_1": {"limit": 5000.0,  "status": "ACTIVE"},
+            "CARD_2": {"limit": 10000.0, "status": "FROZEN"},
         }
         self.bills = {
             "SUB_123": {"type": "Elektrik", "amount": 350.0, "status": "UNPAID"},
-            "SUB_456": {"type": "Su", "amount": 120.0, "status": "PAID"}
+            "SUB_456": {"type": "Su",       "amount": 120.0, "status": "PAID"},
         }
 
 
@@ -36,24 +38,24 @@ class TransferMoneyInput(BaseModel):
 
 def transfer_money(from_account: str, to_account: str, amount: float) -> str:
     """Belirtilen IBAN'lar arasında para transferi yapar."""
-    if from_account not in db.accounts:
-        return f"Hata: Gönderici hesap bulunamadı ({from_account})."
-    
-    sender_bal = db.accounts[from_account]["balance"]
-    
-    if sender_bal < amount:
-        return f"Hata: Yetersiz bakiye. Mevcut bakiye: {sender_bal} TL"
-    
-    # Bakiye düş
-    db.accounts[from_account]["balance"] -= amount
-    
-    # Alıcıyı bul ve ekle
-    if to_account in db.accounts:
-        db.accounts[to_account]["balance"] += amount
-        return f"Başarılı: {amount} TL tutarında transfer gerçekleşti. {from_account} güncel bakiye: {db.accounts[from_account]['balance']} TL."
-    else:
+    with db._lock:
+        if from_account not in db.accounts:
+            return f"Hata: Gönderici hesap bulunamadı ({from_account})."
+
+        sender_bal = db.accounts[from_account]["balance"]
+
+        if sender_bal < amount:
+            return f"Hata: Yetersiz bakiye. Mevcut bakiye: {sender_bal} TL"
+
+        db.accounts[from_account]["balance"] -= amount
+
+        if to_account in db.accounts:
+            db.accounts[to_account]["balance"] += amount
+            return (f"Başarılı: {amount} TL tutarında transfer gerçekleşti. "
+                    f"{from_account} güncel bakiye: {db.accounts[from_account]['balance']} TL.")
         # Mock dış hesap
-        return f"Başarılı: {amount} TL tutarındaki FAST/EFT işlemi farklı bankaya iletildi. Kalan bakiye: {db.accounts[from_account]['balance']} TL."
+        return (f"Başarılı: {amount} TL tutarındaki FAST/EFT işlemi farklı bankaya iletildi. "
+                f"Kalan bakiye: {db.accounts[from_account]['balance']} TL.")
 
 
 class QueryBalanceInput(BaseModel):
@@ -62,9 +64,11 @@ class QueryBalanceInput(BaseModel):
 
 def query_balance(account: str) -> str:
     """Mevcut hesap bakiyesini sorgular."""
-    if account in db.accounts:
-        return f"Hesap Bilgisi ({account}): Bakiye {db.accounts[account]['balance']} TL. Sahibi: {db.accounts[account]['owner']}"
-    return f"Hata: Hesap bulunamadı ({account})."
+    with db._lock:
+        if account in db.accounts:
+            acc = db.accounts[account]
+            return f"Hesap Bilgisi ({account}): Bakiye {acc['balance']} TL. Sahibi: {acc['owner']}"
+        return f"Hata: Hesap bulunamadı ({account})."
 
 
 class PayBillInput(BaseModel):
@@ -74,25 +78,27 @@ class PayBillInput(BaseModel):
 
 def pay_bill(subscriber_id: str, from_account: str) -> str:
     """Belirtilen abone numarası için fatura ödemesi yapar."""
-    if subscriber_id not in db.bills:
-        return f"Hata: Abone numarasına ait fatura bulunamadı."
-    
-    bill = db.bills[subscriber_id]
-    if bill["status"] == "PAID":
-        return "Bilgi: Bu fatura zaten ödenmiş."
-    
-    amount = bill["amount"]
-    
-    if from_account not in db.accounts:
-        return "Hata: Ödeme yapılacak hesap bulunamadı."
-        
-    if db.accounts[from_account]["balance"] < amount:
-         return f"Hata: Yetersiz bakiye. Fatura tutarı: {amount} TL"
-         
-    db.accounts[from_account]["balance"] -= amount
-    bill["status"] = "PAID"
-    
-    return f"Başarılı: {amount} TL tutarındaki {bill['type']} faturanız ödendi. Kalan bakiye: {db.accounts[from_account]['balance']} TL"
+    with db._lock:
+        if subscriber_id not in db.bills:
+            return "Hata: Abone numarasına ait fatura bulunamadı."
+
+        bill = db.bills[subscriber_id]
+        if bill["status"] == "PAID":
+            return "Bilgi: Bu fatura zaten ödenmiş."
+
+        amount = bill["amount"]
+
+        if from_account not in db.accounts:
+            return "Hata: Ödeme yapılacak hesap bulunamadı."
+
+        if db.accounts[from_account]["balance"] < amount:
+            return f"Hata: Yetersiz bakiye. Fatura tutarı: {amount} TL"
+
+        db.accounts[from_account]["balance"] -= amount
+        bill["status"] = "PAID"
+
+        return (f"Başarılı: {amount} TL tutarındaki {bill['type']} faturanız ödendi. "
+                f"Kalan bakiye: {db.accounts[from_account]['balance']} TL")
 
 
 # ─── TOOL DISPATCHER (ARAÇ YÜRÜTÜCÜ) ────────────────

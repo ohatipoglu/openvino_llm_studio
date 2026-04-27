@@ -46,10 +46,11 @@ _orch_lock = threading.Lock()
 _orch = None
 
 def _get_orch() -> Orchestrator:
+    """Modern UI için orchestrator instance (ui_id='modern')."""
     global _orch
     with _orch_lock:
         if _orch is None:
-            _orch = Orchestrator()
+            _orch = Orchestrator(ui_id="modern")
         return _orch
 
 
@@ -204,15 +205,15 @@ def run_inference(prompt, system_prompt, enable_search, enable_dspy,
                   top_p, top_k, repetition_penalty, history):
     """Run inference pipeline."""
     orch = _get_orch()
-    
+
     if not prompt.strip():
         yield history, "⚠️ Prompt boş olamaz.", gr.update()
         return
-    
+
     if not orch.is_model_loaded:
         yield history, "❌ Model yüklü değil. Lütfen önce model seçin ve yükleyin.", gr.update()
         return
-    
+
     params = {
         "temperature": temperature,
         "max_tokens": int(max_tokens),
@@ -220,9 +221,15 @@ def run_inference(prompt, system_prompt, enable_search, enable_dspy,
         "top_k": int(top_k),
         "repetition_penalty": repetition_penalty,
     }
-    
+
     accumulated = ""
-    
+
+    # Chatbot geçmişini backend'e uygun formata dönüştür
+    chat_history = []
+    for turn in (history or []):
+        if isinstance(turn, dict):
+            chat_history.append(turn)
+
     for chunk in orch.run_pipeline(
         prompt=prompt,
         params=params,
@@ -230,10 +237,11 @@ def run_inference(prompt, system_prompt, enable_search, enable_dspy,
         enable_dspy=enable_dspy,
         num_search_results=int(num_search_results),
         system_prompt=system_prompt,
+        history=chat_history if chat_history else None,
     ):
         accumulated += chunk
         yield history, accumulated, gr.update(value=format_status_html(get_system_status()))
-    
+
     history = list(history)
     history.append({"role": "user", "content": prompt})
     history.append({"role": "assistant", "content": accumulated})
@@ -261,6 +269,127 @@ def update_ui_for_mode(mode):
             gr.update(visible=True),   # LLM parametreleri
             gr.update(visible=True),   # Sistem prompt
         ]
+
+
+def get_logs_display(log_type, session_only):
+    """Display logs in UI."""
+    orch = _get_orch()
+    logs = orch.get_logs(session_only=session_only)
+
+    if log_type == "Ham JSON":
+        return json.dumps(logs, ensure_ascii=False, indent=2, default=str)
+
+    lines = []
+
+    if log_type in ("Özet", "Arama"):
+        searches = logs.get("search", [])
+        if searches:
+            lines += ["━" * 60, f"🔍 ARAMA LOGLARI ({len(searches)} kayıt)", "━" * 60]
+            for r in searches:
+                lines += [
+                    f"\n📅 {r.get('timestamp','')}",
+                    f"   Orijinal Prompt : {r.get('original_prompt','')}",
+                    f"   Arama Sorgusu   : {r.get('search_query','')}",
+                    f"   Sonuç Sayısı    : {r.get('num_results',0)}",
+                    f"   Süre            : {r.get('duration_ms',0):.0f} ms",
+                ]
+                ranked = r.get("ranked_results")
+                if ranked:
+                    try:
+                        results = json.loads(ranked) if isinstance(ranked, str) else ranked
+                        lines.append("   Sıralı Sonuçlar :")
+                        for res in results[:5]:
+                            lines.append(f"      [{res.get('rank','-')}] {res.get('title','')[:70]}")
+                            lines.append(f"          {res.get('url','')[:80]}")
+                    except Exception:
+                        pass
+                lines.append("")
+
+    if log_type in ("Özet", "DSPy"):
+        dspy_logs = logs.get("dspy", [])
+        if dspy_logs:
+            lines += ["━" * 60, f"🧠 DSPy LOGLARI ({len(dspy_logs)} kayıt)", "━" * 60]
+            for r in dspy_logs:
+                lines += [
+                    f"\n📅 {r.get('timestamp','')}",
+                    f"   Seçilen Mod      : {r.get('detected_mode','')}",
+                    f"   Mod Gerekçesi    : {r.get('mode_reason','')}",
+                    f"   Süre             : {r.get('duration_ms',0):.0f} ms",
+                    f"   Zenginleştirilmiş Prompt (ilk 300):",
+                    f"      {str(r.get('enriched_prompt',''))[:300].replace(chr(10),' | ')}",
+                ]
+                lines.append("")
+
+    if log_type in ("Özet", "LLM"):
+        llm_logs = logs.get("llm", [])
+        if llm_logs:
+            lines += ["━" * 60, f"⚡ LLM LOGLARI ({len(llm_logs)} kayıt)", "━" * 60]
+            for r in llm_logs:
+                lines += [
+                    f"\n📅 {r.get('timestamp','')}",
+                    f"   Model            : {r.get('model_name','')}",
+                    f"   Input/Output     : {r.get('input_tokens',0)} / {r.get('output_tokens',0)} token",
+                    f"   Tok/sn | Süre    : {r.get('tokens_per_second',0):.2f} | {r.get('duration_ms',0):.0f} ms",
+                    f"   Yanıt (ilk 400)  :",
+                    f"      {str(r.get('response',''))[:400].replace(chr(10),' | ')}",
+                ]
+                lines.append("")
+
+    if log_type in ("Özet", "Hata"):
+        errors = logs.get("errors", [])
+        if errors:
+            lines += ["━" * 60, f"❌ HATA LOGLARI ({len(errors)} kayıt)", "━" * 60]
+            for r in errors:
+                lines += [
+                    f"\n📅 {r.get('timestamp','')}",
+                    f"   Modül      : {r.get('module','')}",
+                    f"   Hata Tipi  : {r.get('error_type','')}",
+                    f"   Mesaj      : {r.get('error_message','')}",
+                ]
+                for stline in str(r.get("stack_trace","")).split("\n")[-5:]:
+                    lines.append(f"      {stline}")
+                lines.append("")
+
+    if log_type in ("Özet", "Genel"):
+        general = logs.get("general", [])
+        if general:
+            lines += ["━" * 60, f"📝 GENEL LOGLAR ({len(general)} kayıt)", "━" * 60]
+            for r in general:
+                icon = {"INFO": "ℹ️", "WARNING": "⚠️", "ERROR": "❌", "DEBUG": "🔧"}.get(
+                    r.get("level",""), "•"
+                )
+                lines.append(f"{icon} {r.get('timestamp','')}  [{r.get('module','')}]  {r.get('message','')}")
+
+    return "\n".join(lines) if lines else "Henüz bu türde log kaydı yok."
+
+
+def clear_logs_action(table_choice):
+    """Clear logs."""
+    orch = _get_orch()
+    table_map = {
+        "Tümü": "all", "Arama": "search", "DSPy": "dspy",
+        "LLM": "llm", "Hata": "errors", "Genel": "general",
+    }
+    success = orch.clear_logs(table_map.get(table_choice, "all"))
+    return "✅ Loglar temizlendi." if success else "❌ Log temizleme başarısız."
+
+
+def check_llamacpp():
+    """llama-cpp-python kurulumunu kontrol et ve durum raporla."""
+    orch = _get_orch()
+    ok, msg = orch.ipex.start_worker()
+    status = orch.get_backend_status()
+    lines = [f"{b.upper()}: {v}" for b, v in status.items()]
+    return "\n".join(lines), f"{'✅' if ok else '❌'} {msg}"
+
+
+def unload_llamacpp():
+    """Yüklü GGUF modelini bellekten çıkar."""
+    orch = _get_orch()
+    ok, msg = orch.ipex.stop_worker()
+    status = orch.get_backend_status()
+    lines = [f"{b.upper()}: {v}" for b, v in status.items()]
+    return "\n".join(lines), f"{'✅' if ok else '❌'} {msg}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -392,6 +521,19 @@ def build_modern_ui():
                             value="Model yüklenmedi.",
                             interactive=False,
                             elem_classes=["model-status"]
+                        )
+
+                        gr.Markdown("---")
+                        gr.Markdown("### 🔷 llama-cpp-python (GGUF/SYCL)")
+
+                        with gr.Row():
+                            llamacpp_check_btn = gr.Button("🔍 Kontrol", size="sm", scale=1)
+                            llamacpp_Unload_btn = gr.Button("⏹️ Durdur", size="sm", scale=1, variant="stop")
+                        llamacpp_status = gr.Textbox(
+                            label="llama-cpp Durumu",
+                            interactive=False,
+                            max_lines=2,
+                            visible=True
                         )
                     
                     with gr.Column(scale=1):

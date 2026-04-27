@@ -11,7 +11,23 @@
       "mcp__pycharm__replace_text_in_file",
       "mcp__pycharm__build_project",
       "mcp__pycharm__search_text",
-      "mcp__pycharm__find_files_by_glob"
+      "mcp__pycharm__find_files_by_glob",
+      "mcp__pycharm__get_file_problems",
+      "Bash(python *)",
+      "Bash(c:\\openvino_llm\\openvino_llm_studio\\env\\scripts\\python.exe *)",
+      "mcp__pycharm__get_run_configurations",
+      "Bash(dir *)",
+      "Bash(del *)",
+      "mcp__pycharm__search_in_files_by_text",
+      "mcp__pycharm__find_files_by_name_keyword",
+      "mcp__pycharm__search_symbol",
+      "Bash(powershell *)",
+      "Bash(rmdir *)",
+      "mcp__pycharm__get_repositories",
+      "Bash(where *)",
+      "Bash(\"c:\\program files\\git\\cmd\\git.exe\" *)",
+      "Bash(\"c:\\program files (x86)\\git\\cmd\\git.exe\" *)",
+      "Bash(\"c:\\program files\\git\\bin\\bash.exe\" *)"
     ]
   },
   "$version": 3

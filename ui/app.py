@@ -45,10 +45,11 @@ _orch = None
 
 
 def _get_orch() -> Orchestrator:
+    """Klasik UI için orchestrator instance (ui_id='app')."""
     global _orch
     with _orch_lock:
         if _orch is None:
-            _orch = Orchestrator()
+            _orch = Orchestrator(ui_id="app")
         return _orch
 
 
@@ -122,6 +123,12 @@ def run_inference(
 
     accumulated = ""
 
+    # Chatbot geçmişini backend'e uygun formata dönüştür
+    chat_history = []
+    for turn in (history or []):
+        if isinstance(turn, dict):
+            chat_history.append(turn)
+
     for chunk in orch.run_pipeline(
         prompt=prompt,
         params=params,
@@ -129,6 +136,7 @@ def run_inference(
         enable_dspy=enable_dspy,
         num_search_results=int(num_search_results),
         system_prompt=system_prompt,
+        history=chat_history if chat_history else None,
     ):
         accumulated += chunk
         yield history, accumulated
@@ -450,15 +458,11 @@ def dl_gguf_catalog(selected, gguf_quant, dest_dir):
         return "⚠️ Model seçilmedi."
     model_id = selected.split("  (")[0].strip()
 
-    # Quant seçimi
-    filename = ""
-    if gguf_quant and gguf_quant.lower() != "otomatik":
-        # Tam dosya adını bilmiyoruz, arama yapacak
-        filename = ""   # download_gguf_model içinde seçilecek
+    quant_hint = "" if (not gguf_quant or gguf_quant.lower() == "otomatik") else gguf_quant
 
     os.makedirs(dest_dir, exist_ok=True)
     yield f"⏳ '{model_id}' GGUF indiriliyor → {dest_dir}\nSeçilen quant: {gguf_quant} ..."
-    success, msg = orch.download_gguf_model(model_id, filename=filename, dest_dir=dest_dir)
+    success, msg = orch.download_gguf_model(model_id, dest_dir=dest_dir, quant_hint=quant_hint)
     yield msg
 
 

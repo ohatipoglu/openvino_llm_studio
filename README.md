@@ -1,401 +1,336 @@
 # ⚡ OpenVINO LLM Studio
 
-> **TR / EN README**: First Turkish, then English.
+Intel Arc iGPU üzerinde yerel LLM çalıştırma ortamı. **llama-server (SYCL)** + **OpenVINO** + **Ollama** backend'lerini tek arayüzde sunar.
 
-Intel Arc iGPU üzerinde yerel LLM çalıştırma ortamı.  
-**llama-server (SYCL/Arc GPU)** + **OpenVINO** + **Ollama** backend'lerini tek arayüzde sunar.  
-DuckDuckGo web araması, DSPy prompt zenginleştirme, **Otonom Ajan (ReAct)** özellikleri ve SQLite loglama dahildir.
+**Özellikler:**
+- 🔷 **3 Backend**: OpenVINO / Ollama / llama-cpp-python (GGUF/SYCL)
+- 🌐 **Web Araması**: DuckDuckGo + BM25 + semantik sıralama
+- 🧠 **DSPy**: Otomatik mod seçimi + prompt optimizasyonu
+- 🤖 **ReAct Ajan**: Tool calling (fonksiyon çağırma) desteği
+- 📊 **SQLite Loglama**: Tüm işlemler `logs/studio.db` içinde
 
 ---
 
-## 🇹🇷 Türkçe
+## 🚀 Hızlı Başlangıç
 
-### 🌟 Öne Çıkanlar
-
-- **Tek UI, 3 backend**: OpenVINO / Ollama / llama-server (llama.cpp)
-- **Otonom YZ Ajanı (ReAct)**: Model kendi kendine fonksiyon çalıştırabilir (Tool Calling).
-- **Web araması**: DuckDuckGo + BM25 + semantik sıralama
-- **DSPy zenginleştirme**: otomatik mod seçimi + template
-- **Modern UI** (2026-04): 3 adımlı workflow, kullanıcı modları (Basit/Orta/Expert), preset profiller
-- **Real-time Dashboard**: CPU, RAM, Model durumu canlı izleme
-- **Loglama**: `logs/studio.db` (SQLite)
-
-### 🚀 Hızlı Başlangıç
-
-1) Intel oneAPI Base Toolkit kur (Windows + Arc/SYCL için gerekli).  
-2) SYCL destekli `llama-server` binary'sini indirip `C:\OpenVINO_LLM\llama-server\` altına çıkar.  
-3) Ortamı kur ve başlat:
+### Tek Komutla Başlatma (ÖNERİLEN)
 
 ```bat
-setup_and_run.bat
+:: Interaktif başlatma (UI seçimi sorar)
+start.bat
+
+:: Direkt Unified UI (YENİ - ÖNERİLEN)
+start.bat unified
+
+:: Direkt Modern UI
+start.bat modern
+
+:: Direkt Workspace UI
+start.bat workspace
+
+:: Direkt Klasik UI
+start.bat classic
 ```
 
-Sonraki çalıştırmalar:
+**`start.bat` Neler Yapar:**
+1. ✅ Ollama Vulkan başlatır (Arc GPU hızlandırma)
+2. ✅ Intel oneAPI ortamını hazırlar
+3. ✅ Conda 'openvino_studio' ortamını aktif eder
+4. ✅ Seçilen UI'ı başlatır
+
+### Manuel Başlatma
 
 ```bat
-run.bat
+conda activate openvino_studio
+python ui\app_unified.py    :: Unified UI (ÖNERİLEN)
+python ui\app_modern.py     :: Modern UI
+python ui\app_workspace.py  :: Workspace UI
+python ui\app.py            :: Klasik UI
 ```
 
-**Modern UI** başlatmak için:
+**Varsayılan Portlar:**
+- Unified UI: `http://127.0.0.1:7860`
+- Modern UI: `http://127.0.0.1:7861`
+- Workspace UI: `http://127.0.0.1:7862`
+- Klasik UI: `http://127.0.0.1:7863`
 
-```bat
-python ui\app_modern.py
-```
+---
 
-UI varsayılan olarak `http://127.0.0.1:7860` (klasik) veya `http://127.0.0.1:7861` (modern) ile açılır.  
-Port doluysa uygulama **7860–7870** aralığında boş bir port seçer.
+## 🎯 UI Seçenekleri
 
-### 🎯 Modern UI Özellikleri (YENİ!)
+### 1. Unified UI (YENİ - ÖNERİLEN)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  ⚡ OpenVINO LLM Studio - Modern UI                     │
-├─────────────────────────────────────────────────────────┤
-│  🎯 Kullanıcı Modu: [🔰 Basit | ⚙️ Orta | 🔬 Expert]   │
-├─────────────────────────────────────────────────────────┤
-│  STATUS BAR: ✅ Model | ⚡ Backend | 💻 CPU | 💾 RAM   │
-├─────────────────────────────────────────────────────────┤
-│  ┌───────┬─────────┬──────┐                            │
-│  │ 1️⃣   │  2️⃣    │ 3️⃣  │                            │
-│  │Model  │ Ayarlar │ Chat │                            │
-│  │Seçimi │         │      │                            │
-│  └───────┴─────────┴──────┘                            │
-└─────────────────────────────────────────────────────────┘
-```
+Tek UI'da 3 farklı görünüm modu:
+
+| Mod | Açıklama |
+|-----|----------|
+| **🏠 Klasik** | Tek ekran, tab navigasyonu |
+| **✨ Modern** | 3 adımlı workflow (Model → Ayarlar → Chat) |
+| **💼 Workspace** | Sidebar + Ana Kanvas düzeni |
 
 **Özellikler:**
-- **3 Kullanıcı Modu**: 🔰 Basit (sadece temel) / ⚙️ Orta (önerilen) / 🔬 Expert (tüm ayarlar)
-- **3 Adımlı Workflow**: Model Seçimi → Ayarlar → Sohbet
-- **Preset Profiller**: 🚀 Hızlı / ⚖️ Dengeli / 🎨 Kaliteli (tek tıkla ayar)
-- **Real-time Dashboard**: CPU, RAM, Model durumu (10 sn'de bir güncellenir)
-- **Contextual Help**: Her slider'da ℹ️ tooltip (ne işe yarar, önerilen değer)
-- **Progressive Disclosure**: Gelişmiş ayarlar accordion içinde gizli
+- ✅ 3 mod seçeneği tek UI'da
+- ✅ Chat history desteği
+- ✅ Log temizleme
+- ✅ Backend detay durum göstergesi
+- ✅ System prompt desteği
 
-### 📋 Klasik vs Modern UI
+### 2. Modern UI
 
-| Özellik | Klasik UI | Modern UI (Yeni) |
-|---------|-----------|------------------|
-| Dosya | `ui/app.py` | `ui/app_modern.py` |
-| Kullanıcı Modu | ❌ Yok | ✅ 3 seviye (Basit/Orta/Expert) |
-| Workflow | Tek ekran | 3 adımlı Tab |
-| Preset | ❌ Yok | ✅ 3 profil (Hızlı/Dengeli/Kaliteli) |
-| Status | Tek satır | Real-time HTML dashboard |
-| GPU Ayarları | Her zaman görünür | Accordion (gizli) |
-| Tooltip | ❌ Yok | ✅ Her slider'da |
+**Özellikler:**
+- 🎯 3 kullanıcı modu (Basit/Orta/Expert)
+- 📋 3 adımlı workflow
+- ⚡ Preset profiller (Hızlı/Dengeli/Kaliteli)
+- 📊 Real-time CPU/RAM dashboard
+- 💡 Her slider'da tooltip
 
-### 🛠️ Port Ayarı (Gradio)
+### 3. Workspace UI
 
-Port'u sabitlemek istersen:
+**Özellikler:**
+- 📱 Sidebar + Ana Kanvas düzeni
+- 📋 Sürekli erişilebilir ayarlar
+- 📊 Minimal header, bilgilendirici footer
+- 🗂️ Accordion'lar ile organize ayarlar
+
+### 4. Klasik UI
+
+**Özellikler:**
+- 🖥️ Tek ekran arayüz
+- ⚙️ Tüm ayarlar görünür
+- ✅ Stabil ve alışılmış
+
+---
+
+## 📋 Kullanım Kılavuzu
+
+### 1. Model Seçimi ve Yükleme
+
+1. **Backend seçin**: OpenVINO / Ollama / llama-cpp
+2. **Model seçin**: Dropdown'dan seçin veya 🔄 ile yenileyin
+3. **Cihaz seçin**: CPU / GPU / AUTO
+4. **⚡ Modeli Yükle** butonuna tıklayın
+
+**Ollama için:**
+- Model otomatik yüklenir (ilk request'te)
+- "Modeli Yükle" butonu ile önceden yüklenebilir
+- `keep_alive=-1` ile bellekte tutulur
+
+### 2. Ayarlar
+
+**Preset Seçimi (Hızlı):**
+| Preset | Temperature | Max Tokens | Kullanım |
+|--------|-------------|------------|----------|
+| 🚀 Hızlı | 0.5 | 256 | Düşük kalite, hızlı |
+| ⚖️ Dengeli | 0.7 | 512 | Önerilen |
+| 🎨 Kaliteli | 0.9 | 1024 | Yüksek kalite, yavaş |
+
+**Manuel Ayarlar:**
+- **Temperature**: 0.7 (önerilen) - Düşük=odaklı, Yüksek=yaratıcı
+- **Max Tokens**: 512 - Maksimum yanıt uzunluğu
+- **Top-P**: 0.9 - Nucleus sampling
+- **Top-K**: 50 - En iyi k token'dan örneklem
+- **Repetition Penalty**: 1.1 - Tekrarları önle
+
+**Search & DSPy:**
+- 🌐 **Web Araması**: DuckDuckGo ile güncel bilgi ara
+- 🧠 **DSPy**: Otomatik mod seçimi ve prompt optimizasyonu
+
+### 3. Sohbet
+
+1. Sorunuzu yazın
+2. **📤 Gönder** butonuna tıklayın
+3. Yanıtı real-time izleyin
+
+**Chat History:**
+- Geçmiş sohbetler otomatik saklanır
+- "🗑️ Temizle" ile geçmişi silebilirsiniz
+
+---
+
+## 🔧 Yapılandırma
+
+### Port Ayarı
 
 ```bat
 set GRADIO_SERVER_PORT=7861
-python ui\app_modern.py
+python ui\app_unified.py
 ```
 
-Host değiştirmek istersen:
+### Host Ayarı
 
 ```bat
 set GRADIO_SERVER_NAME=0.0.0.0
-set GRADIO_SERVER_PORT=7861
-python ui\app_modern.py
+python ui\app_unified.py
 ```
 
-### 📋 Sistem Gereksinimleri
+### Ollama Timeout (Büyük Modeller)
 
-| Gereksinim | Detay |
-|---|---|
-| İşletim Sistemi | Windows 11 |
-| CPU | Intel (12. nesil+ önerilir) |
-| GPU | Intel Arc iGPU (Arc Graphics / A-serisi) |
-| RAM | 16 GB+ |
-| Disk | 20 GB+ (modeller için) |
-| Yazılım | Anaconda, Intel oneAPI Base Toolkit 2025+ |
+Timeout varsayılan olarak **300 saniye (5 dakika)**. Daha büyük modeller için:
 
-### 📁 Proje Yapısı
+```python
+# modules/ipex_backend.py içinde
+timeout=600  # 10 dakika
+```
+
+---
+
+## 📁 Proje Yapısı
 
 ```
 openvino_llm_studio/
 ├── ui/
-│   ├── app.py                    # Klasik Gradio arayüzü
-│   ├── app_modern.py             # ✨ Modern UI (2026-04)
+│   ├── app.py                 # Klasik UI
+│   ├── app_modern.py          # Modern UI
+│   ├── app_workspace.py       # Workspace UI
+│   ├── app_unified.py         # ✨ Unified UI (YENİ)
 │   └── components/
-│       └── monitoring.py         # Monitoring dashboard bileşenleri
+│       └── monitoring.py
 ├── core/
-│   ├── constants.py              # ✨ Merkezi yapılandırma
-│   ├── prompts.py                # ✨ Prompt template'leri
-│   ├── error_handling.py         # ✨ Unified error handling
-│   ├── orchestrator.py           # Backend ve Ajan (ReAct) koordinasyonu
-│   ├── orchestrator_v2.py        # ✨ Geliştirilmiş orchestrator
+│   ├── orchestrator.py        # Merkezi yönetim
+│   ├── state_manager.py       # ✨ UI-bazlı state yönetimi
 │   ├── config.py
-│   └── schema.py                 # Pydantic veri doğrulama modelleri
+│   ├── constants.py
+│   └── schema.py
 ├── modules/
-│   ├── dspy/
-│   │   ├── classifier.py         # ✨ Multi-stage classifier
-│   │   └── __init__.py
-│   ├── search/
-│   │   ├── async_searcher.py    # ✨ Async parallel search
-│   │   └── __init__.py
-│   ├── security/
-│   │   ├── prompt_guard.py      # ✨ Prompt injection protection
-│   │   └── __init__.py
-│   ├── database.py               # SQLite loglama (SQLAlchemy)
-│   ├── tools.py                  # Ajanın kullanabileceği araçlar
-│   ├── model_manager.py          # OpenVINO model tarama + yükleme
-│   ├── search_engine.py          # DuckDuckGo + BM25 + semantik sıralama
-│   ├── dspy_enricher.py          # DSPy prompt zenginleştirme
-│   ├── ipex_backend.py           # OllamaBackend + LlamaCppBackend
-│   ├── ipex_worker_client.py     # Orchestrator ↔ backend köprüsü
-│   └── hf_catalog.py             # HuggingFace model kataloğu
-├── tests/
-│   ├── test_dspy_classifier.py   # ✨ DSPy classifier testleri
-│   ├── test_security.py          # ✨ Security testleri
-│   └── __init__.py
-├── docs/
-│   ├── ARCHITECTURE.md           # ✨ Mimari döküman
-│   └── API_REFERENCE.md          # ✨ API referansı
-├── logs/                         # SQLite DB / log (otomatik oluşur)
-├── integration_guide.py          # ✨ Entegrasyon test script
-├── requirements.txt
-├── setup_and_run.bat             # İlk kurulum
-└── run.bat                       # Günlük çalıştırma
+│   ├── database.py            # SQLite loglama
+│   ├── search_engine.py       # DuckDuckGo + BM25
+│   ├── dspy_enricher.py       # DSPy optimizasyon
+│   ├── model_manager.py       # OpenVINO yönetimi
+│   ├── ipex_backend.py        # Ollama + llama-cpp
+│   ├── ipex_worker_client.py  # llama-server client
+│   ├── hf_catalog.py          # HuggingFace katalog
+│   └── tools.py               # ReAct araçları
+├── logs/                      # SQLite DB
+├── start.bat                  # ✨ Tek komut başlatma
+├── setup_and_run.bat          # İlk kurulum
+└── run.bat                    # Günlük çalıştırma
 ```
 
-### 🏗️ Mimari Akışı
+---
+
+## 🏗️ Mimari Akışı
 
 ```
-[Kullanıcı Girdisi (Modern UI)]
+[Kullanıcı Girdisi (UI)]
          |
          v
-[OrchestratorV2 (core/orchestrator_v2.py)]
+[Orchestrator]
          |
-         ├────> [Security Guard] --(Validation)--> [Prompt Injection Koruması]
+         ├────> [Web Araması] ────> [BM25 + Semantik]
          |
-         ├────> [ModeClassifier] --(Multi-stage)--> [DSPy Mod Seçimi]
-         |                                               |
-         |                                               v
-         |<───────────────────────────────────── [Template Uygulama]
-         |
-         ├────> [AsyncWebSearcher] --(Parallel)--> [Arama Sonuçları]
-         |                                               |
-         |                                               v
-         |<───────────────────────────────────── [Hybrid Ranking]
+         ├────> [DSPy] ────────────> [Mod Seçimi + Template]
          |
          v
-[Otonom ReAct Döngüsü] <───────> [Araçlar (modules/tools.py)]
-         |
-         +-----> [OpenVINO / llama-server / Ollama Backend]
+[Backend: OpenVINO / Ollama / llama-cpp]
          |
          v
-[LLM Yanıtı] -> [Modern UI Dashboard]
+[LLM Yanıtı] ───> [UI Dashboard]
 
-(Tüm adımlar `database.py` + `error_handling.py` ile loglanır)
+(Tüm adımlar SQLite'da loglanır)
 ```
 
-### 📂 Model Dizinleri
+---
 
-**GGUF (llama-server / Arc GPU)**:
+## 📋 Sistem Gereksinimleri
+
+| Gereksinim | Detay |
+|---|---|
+| **OS** | Windows 11 |
+| **CPU** | Intel 12. nesil+ (önerilir) |
+| **GPU** | Intel Arc iGPU (veya CPU modu) |
+| **RAM** | 16 GB+ (32 GB önerilir) |
+| **Disk** | 20 GB+ (modeller hariç) |
+| **Yazılım** | Anaconda, Intel oneAPI (opsiyonel) |
+
+---
+
+## 📂 Model Dizinleri
+
+**GGUF (llama-cpp-python):**
 ```
 C:\OpenVINO_LLM\gguf\
 ```
 
-**OpenVINO**:
+**OpenVINO:**
 ```
 C:\OpenVINO_LLM\
 ```
 
-HuggingFace modelini OpenVINO formatına çevirme örneği:
-
-```bash
-optimum-cli export openvino ^
-  --model Qwen/Qwen2.5-7B-Instruct ^
-  --weight-format int4 ^
-  C:\OpenVINO_LLM\Qwen2.5-7B-int4-ov
+**Ollama:**
 ```
-
-### 🔧 Sorun Giderme
-
-- **llama-server başlamıyor**:
-
-```bat
-llama-server.exe --list-devices
+~/.ollama/models/
 ```
-
-`SYCL0: Intel Arc Graphics` görünmüyorsa oneAPI / driver / SYCL kurulumu eksik olabilir.
-
-- **`unknown model architecture`**: `llama-server` çok eski olabilir. Güncel SYCL binary indir: `https://github.com/ggml-org/llama.cpp/releases`
-
-- **DuckDuckGo rate limit**: Biraz bekle veya bağımlılıkları güncelle (`ddgs`).
-
-- **DSPy Arama/Sınıflandırma Timeout**: İstekler çok uzun sürerse 15 saniyelik zaman aşımı devreye girer ve sistem kural-tabanlı (fallback) moda geçer. Bu özellik UI'ın donmasını engeller.
-
-- **Modern UI hataları**: Gradio 6.0+ gerektirir. Kurulum: `pip install -U gradio`
-
-### 📊 Performans Metrikleri (İyileştirmeler)
-
-| Metrik | Önceki | Sonraki | İyileştirme |
-|--------|--------|---------|-------------|
-| Classification Accuracy | %85 | %94 | +9% |
-| Search Latency (3 query) | 9.2s | 3.4s | %63 hızlı |
-| Search Latency (5 query) | 15.1s | 3.8s | %75 hızlı |
-| UI Cognitive Load | Yüksek | Düşük | Progressive disclosure |
-| Test Coverage | %0 | %82+ | +82% |
 
 ---
 
-## 🇺🇸 English
+## 🔍 Sorun Giderme
 
-### 🌟 Highlights
+### "Model yüklü değil" hatası
 
-- **One UI, 3 backends**: OpenVINO / Ollama / llama-server (llama.cpp)
-- **Autonomous AI Agent (ReAct)**: Model can trigger functions itself (Tool Calling).
-- **Web search**: DuckDuckGo + BM25 + semantic reranking
-- **DSPy enrichment**: automatic mode selection + templates
-- **Modern UI** (2026-04): 3-step workflow, user modes (Beginner/Intermediate/Expert), preset profiles
-- **Real-time Dashboard**: Live CPU, RAM, Model status monitoring
-- **Logging**: `logs/studio.db` (SQLite)
+**Çözüm:**
+1. Backend seçili mi kontrol edin
+2. Model dropdown'dan model seçin
+3. "⚡ Modeli Yükle" butonuna tıklayın
 
-### 🚀 Quickstart
+### Ollama timeout hatası
 
-1) Install Intel oneAPI Base Toolkit (recommended for Arc/SYCL on Windows).  
-2) Download a SYCL-enabled `llama-server` release and extract to `C:\OpenVINO_LLM\llama-server\`.  
-3) Setup and run:
+**Çözüm:**
+- Büyük modeller için 5 dakika timeout yeterli olmayabilir
+- `modules/ipex_backend.py` içinde `timeout=600` yapın (10 dakika)
 
+### llama-cpp-python bulunamadı
+
+**Çözüm:**
 ```bat
-setup_and_run.bat
+pip install llama-cpp-python
 ```
 
-Daily run:
-
+SYCL/XPU desteği için:
 ```bat
-run.bat
+set CMAKE_ARGS=-DGGML_SYCL=ON
+pip install llama-cpp-python --no-binary llama-cpp-python
 ```
 
-**Modern UI** launch:
+### DuckDuckGo rate limit
 
-```bat
-python ui\app_modern.py
-```
+**Çözüm:**
+- Biraz bekleyin
+- Arama sonuç sayısını azaltın (5 → 3)
 
-The UI usually opens at `http://127.0.0.1:7860` (classic) or `http://127.0.0.1:7861` (modern).  
-If the port is already taken, the app will **auto-pick a free port in 7860–7870**.
+### GPU bellek yetersiz
 
-### 🎯 Modern UI Features (NEW!)
-
-**Features:**
-- **3 User Modes**: 🔰 Beginner (basic only) / ⚙️ Intermediate (recommended) / 🔬 Expert (all settings)
-- **3-Step Workflow**: Model Selection → Settings → Chat
-- **Preset Profiles**: 🚀 Fast / ⚖️ Balanced / 🎨 Quality (one-click)
-- **Real-time Dashboard**: CPU, RAM, Model status (updates every 10 sec)
-- **Contextual Help**: ℹ️ tooltip on every slider (what it does, recommended value)
-- **Progressive Disclosure**: Advanced settings hidden in accordion
-
-### 📋 Classic vs Modern UI
-
-| Feature | Classic UI | Modern UI (New) |
-|---------|------------|-----------------|
-| File | `ui/app.py` | `ui/app_modern.py` |
-| User Mode | ❌ None | ✅ 3 levels |
-| Workflow | Single screen | 3-step Tabs |
-| Preset | ❌ None | ✅ 3 profiles |
-| Status | Single line | Real-time HTML |
-| GPU Settings | Always visible | Accordion (hidden) |
-| Tooltip | ❌ None | ✅ Every slider |
-
-### 🛠️ Gradio Server Configuration
-
-Force a specific port:
-
-```bat
-set GRADIO_SERVER_PORT=7861
-python ui\app_modern.py
-```
-
-Bind to a different host:
-
-```bat
-set GRADIO_SERVER_NAME=0.0.0.0
-set GRADIO_SERVER_PORT=7861
-python ui\app_modern.py
-```
-
-### 📋 System Requirements
-
-| Requirement | Details |
-|---|---|
-| OS | Windows 11 |
-| CPU | Intel (12th gen+ recommended) |
-| GPU | Intel Arc iGPU (Arc Graphics / A-series) |
-| RAM | 16 GB+ |
-| Disk | 20 GB+ (models) |
-| Software | Anaconda, Intel oneAPI Base Toolkit 2025+ |
-
-### 🏗️ Architectural Flow
-
-```
-[User Input (Modern UI)]
-      |
-      v
-[OrchestratorV2 (core/orchestrator_v2.py)]
-      |
-      ├----> [Security Guard] --(Validation)--> [Prompt Injection Protection]
-      |
-      ├----> [ModeClassifier] --(Multi-stage)--> [DSPy Mode Selection]
-      |                                              |
-      |                                              v
-      |<───────────────────────────────────── [Template Application]
-      |
-      ├----> [AsyncWebSearcher] --(Parallel)--> [Search Results]
-      |                                              |
-      |                                              v
-      |<───────────────────────────────────── [Hybrid Ranking]
-      |
-      v
-[Autonomous ReAct Loop] <───────> [Tools (modules/tools.py)]
-      |
-      +-----> [OpenVINO / llama-server / Ollama Backend]
-      |
-      v
-[LLM Response] -> [Modern UI Dashboard]
-
-(All steps are logged via `database.py` + `error_handling.py`)
-```
-
-### 📊 Performance Metrics (Improvements)
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Classification Accuracy | 85% | 94% | +9% |
-| Search Latency (3 query) | 9.2s | 3.4s | 63% faster |
-| Search Latency (5 query) | 15.1s | 3.8s | 75% faster |
-| UI Cognitive Load | High | Low | Progressive disclosure |
-| Test Coverage | 0% | 82%+ | +82% |
+**Çözüm:**
+- GPU Max Alloc % değerini düşürün (75% → 60%)
+- KV Cache Precision: u8 kullanın
+- Daha küçük model deneyin
 
 ---
 
-## 📚 Documentation
+## 📊 Performans İpuçları
 
-- **Architecture**: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- **API Reference**: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
-- **Improvements Report**: [`IMPROVEMENTS.md`](IMPROVEMENTS.md)
-- **Implementation Summary**: [`IMPLEMENTATION_SUMMARY.md`](IMPLEMENTATION_SUMMARY.md)
-- **Integration Guide**: [`integration_guide.py`](integration_guide.py)
+| İyileştirme | Açıklama |
+|-------------|----------|
+| **GPU Max Alloc %** | 75% önerilir (crash önleme) |
+| **KV Cache Precision** | u8 = 2x daha az VRAM |
+| **Num Streams** | Büyük modellerde 1 tutun |
+| **Performance Hint** | LATENCY = tek kullanıcı |
 
 ---
 
-## 🧪 Testing
-
-Run integration tests:
+## 🧪 Test
 
 ```bat
-python integration_guide.py
-```
-
-Run pytest (requires pytest installation):
-
-```bat
-pip install pytest pytest-asyncio
+:: Pytest (test dosyası eklenmeli)
+pip install pytest
 pytest tests/ -v
 ```
+
+---
+
+## 📚 Daha Fazla Bilgi
+
+- **UI Analiz Raporu**: `docs/UI_ANALYSIS_REPORT.md`
+- **State Management**: `core/state_manager.py`
 
 ---
 

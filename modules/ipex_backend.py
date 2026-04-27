@@ -168,13 +168,74 @@ class OllamaBackend:
 
     def generate(self, prompt: str, params: dict,
                  session_id: str = "", raw_prompt: str = "",
-                 system_prompt: str = "") -> tuple[str, dict]:
+                 system_prompt: str = "",
+                 history: list = None) -> tuple[str, dict]:
         if not self._current_model:
             return "", {"error": "Ollama modeli seçilmedi."}
 
         with self._lock:
             start = time.time()
             try:
+                # Geçmiş varsa /api/chat endpoint kullan; yoksa /api/generate yeterli
+                if history:
+                    messages = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": system_prompt})
+                    for turn in history:
+                        role = turn.get("role", "user")
+                        content = turn.get("content", "")
+                        if role in ("user", "assistant") and content:
+                            messages.append({"role": role, "content": content})
+                    messages.append({"role": "user", "content": prompt})
+
+                    chat_payload = {
+                        "model": self._current_model,
+                        "messages": messages,
+                        "stream": False,
+                        "options": {
+                            "temperature": params.get("temperature", 0.7),
+                            "num_predict": params.get("max_tokens", 512),
+                            "top_p": params.get("top_p", 0.9),
+                            "top_k": params.get("top_k", 50),
+                            "repeat_penalty": params.get("repetition_penalty", 1.1),
+                        },
+                    }
+                    # Timeout: 300 saniye (5 dakika) - büyük modeller için
+                    r = requests.post(
+                        f"{self.base_url}/api/chat",
+                        json=chat_payload,
+                        timeout=300,
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    response = data.get("message", {}).get("content", "").strip()
+                    elapsed_ms = (time.time() - start) * 1000
+                    eval_count = data.get("eval_count", len(response.split()))
+                    prompt_eval_count = data.get("prompt_eval_count", 0)
+                    tps = eval_count / max(elapsed_ms / 1000, 0.001)
+                    metrics = {
+                        "duration_ms": round(elapsed_ms, 1),
+                        "input_tokens": prompt_eval_count,
+                        "output_tokens": eval_count,
+                        "tokens_per_second": round(tps, 2),
+                    }
+                    if self.db:
+                        self.db.log_llm(
+                            session_id=session_id,
+                            model_name=f"ollama/{self._current_model}",
+                            model_type="ollama",
+                            params=params,
+                            system_prompt=system_prompt,
+                            final_prompt=prompt,
+                            raw_prompt=raw_prompt,
+                            response=response,
+                            input_tokens=prompt_eval_count,
+                            output_tokens=eval_count,
+                            duration_ms=elapsed_ms,
+                            tokens_per_second=tps,
+                        )
+                    return response, metrics
+
                 payload = {
                     "model": self._current_model,
                     "prompt": prompt,
@@ -190,6 +251,7 @@ class OllamaBackend:
                 if system_prompt:
                     payload["system"] = system_prompt
 
+                # Timeout: 300 saniye (5 dakika) - büyük modeller için
                 r = requests.post(
                     f"{self.base_url}/api/generate",
                     json=payload,
@@ -230,7 +292,7 @@ class OllamaBackend:
                 return response, metrics
 
             except requests.Timeout:
-                err = "Ollama timeout — model çok uzun sürdü."
+                err = "Ollama timeout — model 5 dakikadan uzun sürdü."
                 logger.error(err)
                 return "", {"error": err}
             except Exception as e:
@@ -239,8 +301,69 @@ class OllamaBackend:
                     self.db.log_error(session_id, "OllamaBackend.generate", e)
                 return "", {"error": str(e)}
 
+    def generate_stream(self, prompt: str, params: dict,
+                        system_prompt: str = "",
+                        history: list = None):
+        """
+        Streaming token üretimi — her token üretildikçe yield eder.
+        Gradio pipeline içinde gerçek zamanlı çıktı için kullanılır.
+        Timeout: 300 saniye (5 dakika) - büyük modeller için.
+        """
+        if not self._current_model:
+            yield ""
+            return
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        if history:
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self._current_model,
+            "messages": messages,
+            "stream": True,
+            "options": {
+                "temperature": params.get("temperature", 0.7),
+                "num_predict": params.get("max_tokens", 512),
+                "top_p": params.get("top_p", 0.9),
+                "top_k": params.get("top_k", 50),
+                "repeat_penalty": params.get("repetition_penalty", 1.1),
+            },
+        }
+        try:
+            # Timeout: 300 saniye (5 dakika)
+            with requests.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+                stream=True,
+                timeout=300,
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            token = data.get("message", {}).get("content", "")
+                            if token:
+                                yield token
+                            if data.get("done"):
+                                break
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            logger.error(f"Ollama streaming hatası: {e}")
+            yield f"\n❌ Streaming hatası: {e}"
+
     def generate_raw(self, prompt: str, params: dict) -> tuple[str, dict]:
-        """Ham prompt ile üretim (system mesajı yok). DSPy sınıflandırması için."""
+        """Ham prompt ile üretim (system mesajı yok). DSPy sınıflandırması için.
+        Timeout: 300 saniye (5 dakika) - büyük modeller için.
+        """
         if not self._current_model:
             return "", {"error": "Ollama modeli seçilmedi."}
 
@@ -259,10 +382,11 @@ class OllamaBackend:
                         "repeat_penalty": 1.0,
                     }
                 }
+                # Timeout: 300 saniye (5 dakika)
                 r = requests.post(
                     f"{self.base_url}/api/generate",
                     json=payload,
-                    timeout=30
+                    timeout=300
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -277,11 +401,44 @@ class OllamaBackend:
 
     @property
     def is_loaded(self) -> bool:
-        return self._current_model is not None and self.is_available()
+        """Ollama için model yüklü mü kontrol et.
+        Eğer _current_model set ise True.
+        Değilse, API'den çalışan modelleri kontrol et.
+        """
+        # Eğer _current_model set ise direkt True dön
+        if self._current_model is not None:
+            return self.is_available()
+        
+        # Ollama'da model otomatik yüklenebilir, API'den kontrol et
+        try:
+            import requests
+            r = requests.get(f"{self.base_url}/api/tags", timeout=3)
+            if r.status_code == 200:
+                models = r.json().get("models", [])
+                # En az bir model varsa Ollama hazır
+                return len(models) > 0
+        except Exception:
+            pass
+        
+        return False
 
     @property
     def loaded_model_name(self) -> str:
-        return f"ollama/{self._current_model}" if self._current_model else ""
+        if self._current_model:
+            return f"ollama/{self._current_model}"
+        
+        # API'den şu an aktif modeli almaya çalış
+        try:
+            import requests
+            r = requests.get(f"{self.base_url}/api/tags", timeout=3)
+            if r.status_code == 200:
+                models = r.json().get("models", [])
+                if models:
+                    return f"ollama/{models[0].get('name', '?')}"
+        except Exception:
+            pass
+        
+        return ""
 
     def get_memory_info(self) -> dict:
         mem = psutil.virtual_memory()
@@ -339,6 +496,7 @@ class LlamaCppBackend:
         self._device: str = "cpu"
         self._lock = threading.Lock()
         self._available = self._check_llama_cpp()
+        self._sycl_available: Optional[bool] = None  # check_sycl_support() cache
 
     # ── Kurulum Kontrolü ───────────────────────────────
 
@@ -357,11 +515,21 @@ class LlamaCppBackend:
     def check_sycl_support(self) -> bool:
         """
         llama-cpp-python'un SYCL/XPU desteği ile derlenip derlenmediğini kontrol et.
+        Sonuç ilk çağrıda hesaplanır ve cache'lenir.
+        """
+        if self._sycl_available is not None:
+            return self._sycl_available
+        self._sycl_available = self._detect_sycl_support()
+        return self._sycl_available
+
+    def _detect_sycl_support(self) -> bool:
+        """
+        SYCL tespiti — dahili, cache'lenmemiş implementasyon.
 
         Yöntem sırası:
           1. llama_cpp._lib sembol kontrolü (ggml_sycl_can_generate, ggml_backend_sycl_init)
           2. llama_print_system_info() çıktısında "SYCL" arama
-          3. Llama(n_gpu_layers=1) ile başlangıç testi — SYCL varsa GPU cihazı listelenir
+          3. SYCL DLL varlığı (sycl8.dll / ggml-sycl.dll)
         """
         try:
             import llama_cpp
@@ -680,7 +848,8 @@ class LlamaCppBackend:
 
     def generate(self, prompt: str, params: dict,
                  session_id: str = "", raw_prompt: str = "",
-                 system_prompt: str = "") -> tuple[str, dict]:
+                 system_prompt: str = "",
+                 history: list = None) -> tuple[str, dict]:
         """
         Metin üret.
 
@@ -696,10 +865,15 @@ class LlamaCppBackend:
             start = time.time()
             try:
                 sys_msg = system_prompt or "You are a helpful assistant."
-                messages = [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user",   "content": prompt},
-                ]
+                messages = [{"role": "system", "content": sys_msg}]
+                # Önceki tur mesajlarını ekle
+                if history:
+                    for turn in history:
+                        role = turn.get("role", "user")
+                        content = turn.get("content", "")
+                        if role in ("user", "assistant") and content:
+                            messages.append({"role": role, "content": content})
+                messages.append({"role": "user", "content": prompt})
 
                 temperature = params.get("temperature", 0.7)
                 max_tokens  = params.get("max_tokens", 512)
@@ -792,6 +966,49 @@ class LlamaCppBackend:
                 if self.db:
                     self.db.log_error(session_id, "LlamaCppBackend.generate", e)
                 return "", {"error": str(e)}
+
+    def generate_stream(self, prompt: str, params: dict,
+                        system_prompt: str = "",
+                        history: list = None):
+        """
+        Streaming token üretimi — her token üretildikçe yield eder.
+        """
+        if self._model is None:
+            yield ""
+            return
+
+        sys_msg = system_prompt or "You are a helpful assistant."
+        messages = [{"role": "system", "content": sys_msg}]
+        if history:
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+
+        stop_tokens = ["<|im_end|>", "<|end|>", "<|eot_id|>", "<|endoftext|>",
+                       "</s>", "\nUser:", "\nHuman:"]
+        try:
+            with self._lock:
+                stream = self._model.create_chat_completion(
+                    messages=messages,
+                    max_tokens=params.get("max_tokens", 512),
+                    temperature=params.get("temperature", 0.7),
+                    top_p=params.get("top_p", 0.9),
+                    top_k=params.get("top_k", 50),
+                    repeat_penalty=params.get("repetition_penalty", 1.1),
+                    stop=stop_tokens,
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = chunk["choices"][0].get("delta", {})
+                    token = delta.get("content", "")
+                    if token:
+                        yield token
+        except Exception as e:
+            logger.error(f"GGUF streaming hatası: {e}")
+            yield f"\n❌ Streaming hatası: {e}"
 
     def generate_raw(self, prompt: str, params: dict) -> tuple[str, dict]:
         """Ham prompt ile üretim (DSPy sınıflandırması için)."""
@@ -1102,7 +1319,8 @@ class LlamaServerBackend:
 
     def generate(self, prompt: str, params: dict,
                  session_id: str = "", raw_prompt: str = "",
-                 system_prompt: str = "") -> tuple[str, dict]:
+                 system_prompt: str = "",
+                 history: list = None) -> tuple[str, dict]:
         """
         /v1/chat/completions endpoint'ini kullan (OpenAI uyumlu).
         """
@@ -1116,6 +1334,12 @@ class LlamaServerBackend:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        if history:
+            for turn in history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": prompt})
 
         # OpenAI formatı (stop tokenlar hayati önem taşır)

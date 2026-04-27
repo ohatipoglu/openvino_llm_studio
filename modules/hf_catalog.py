@@ -399,3 +399,13 @@ class HFModelCatalog:
             else:
                 self._cache.clear()
         logger.info(f"Katalog önbelleği temizlendi: {source or 'tümü'}")
+
+
+# ─────────────────────────────────────────
+# Module-level helper (legacy compatibility)
+# ─────────────────────────────────────────
+
+def get_catalog() -> list[CatalogEntry]:
+    """Legacy helper — GGUF kataloğunu döndürür."""
+    catalog = HFModelCatalog()
+    return catalog.get_gguf_models()

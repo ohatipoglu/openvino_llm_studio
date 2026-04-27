@@ -209,7 +209,7 @@ class DSPyEnricher:
             try:
                 raw_queries = _execute_with_timeout(
                     self._router.generate_query,
-                    timeout_seconds=10,
+                    timeout_seconds=25,  # 10s → 25s (matches DSPyConfig.SEARCH_QUERY_TIMEOUT_S)
                     question=prompt
                 )
 
@@ -282,9 +282,10 @@ class DSPyEnricher:
 
         return result
 
-    _CLASSIFY_TIMEOUT_S = 15
-    _CLASSIFY_COOLDOWN_S = 30
-    _CLASSIFY_MAX_TOKENS = 12
+    # Timeout values optimized for 20-30B models on Vulkan/Ollama
+    _CLASSIFY_TIMEOUT_S = 45      # 15s → 45s (matches DSPyConfig)
+    _CLASSIFY_COOLDOWN_S = 120    # 30s → 120s (prevents repeated timeouts)
+    _CLASSIFY_MAX_TOKENS = 20     # 12 → 20 (stable parsing for mode names)
 
     def _select_mode_via_llm(self, prompt: str, steps: list) -> tuple[str, str]:
         """LLM ile mod seç. Başarısız olursa kural tabanlı sisteme (fallback) geçer."""
@@ -344,27 +345,55 @@ class DSPyEnricher:
                 return self._rule_fallback(prompt, steps)
 
     def _heuristic_select_mode(self, prompt: str) -> tuple[str | None, str]:
+        """
+        Fast heuristic classification based on high-confidence patterns.
+        Expanded rules for 20-30B models to reduce LLM classification overhead.
+        """
         p = (prompt or "").lower()
 
-        if any(k in p for k in ["transfer", "gönder", "öde", "bakiye", "fatura"]):
+        # Banking/tool operations (highest priority)
+        if any(k in p for k in ["transfer", "gönder", "öde", "bakiye", "fatura", "havale", "eft"]):
             return "ReAct", "Heuristik: Bankacılık ve işlem komutu."
 
-        if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca", "madde madde özet"]):
+        # Summarization
+        if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca", "madde madde özet", "özet çıkar"]):
             return "Summarize", "Heuristik: özetleme kalıbı."
 
+        # Comparison
         if any(k in p for k in [
             "karşılaştır", "kıyasla", "farkları", "farkları neler", "avantaj", "dezavantaj",
             "artıları", "eksileri", "pro", "con", "vs", "eleştir", "değerlendir",
+            "hangisi daha iyi", "hangisi daha uygun", "farkı ne"
         ]):
             return "MultiChainComparison", "Heuristik: karşılaştırma/eleştiri kalıbı."
 
+        # Code/math
         if any(k in p for k in [
             "hesapla", "calculate", "kod yaz", "write code", "python", "sql", "regex",
             "formül", "denklem", "algoritma", "complexity", "big o",
+            "matematik", "matematiksel", "türev", "integral"
         ]):
             return "ProgramOfThought", "Heuristik: hesaplama/kod kalıbı."
 
-        if any(k in p for k in ["güncel", "haber", "latest", "news", "araştır", "kaynak", "link"]):
+        # NEW: Simple factual questions (Predict mode) - only if short
+        factual_keywords = [
+            "kimdir", "kim", "ne zaman", "nerede", "kaç tane", "kaç yaşında",
+            "başkenti", "başkenti neresi", "nedir", "ne demek", "anlamı",
+            "tanımı", "açıklaması", "hangi", "hangisi"
+        ]
+        if any(k in p for k in factual_keywords) and len(prompt.split()) < 10:
+            return "Predict", "Heuristik: Basit olgusal soru."
+
+        # NEW: Explanation requests (ChainOfThought mode)
+        if any(k in p for k in [
+            "neden", "nasıl", "açıkla", "anlat", "izah et", "tarif et",
+            "adım adım", "detaylı", "derinlemesine", "kapsamlı",
+            "nasıl çalışır", "ne işe yarar", "amaç ne"
+        ]):
+            return "ChainOfThought", "Heuristik: Açıklama/adım adım anlatım kalıbı."
+
+        # Current/recent information (ReAct mode - may need search)
+        if any(k in p for k in ["güncel", "son", "en son", "bugün", "bu hafta", "bu ay", "haber", "news", "gelişme", "son durum", "şu an"]):
             return "ReAct", "Heuristik: güncel bilgi/araştırma kalıbı."
 
         return None, ""
@@ -451,20 +480,39 @@ class DSPyEnricher:
         p = (prompt or "").lower()
         steps.append({"action": "rule_fallback"})
 
-        if any(k in p for k in ["transfer", "gönder", "öde", "bakiye", "fatura"]):
+        # Banking/tool operations
+        if any(k in p for k in ["transfer", "gönder", "öde", "bakiye", "fatura", "havale", "eft"]):
             return "ReAct", "Heuristik: Bankacılık ve işlem komutu."
-        if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca"]):
+        
+        # Summarization
+        if any(k in p for k in ["özetle", "summarize", "tldr", "kısaca", "özet çıkar"]):
             return "Summarize", "Özetleme kalıbı tespit edildi."
+        
+        # Comparison
         if any(k in p for k in [
             "karşılaştır", "kıyasla", "farkları", "avantaj", "dezavantaj",
-            "artıları", "eksileri", "pro", "con", "vs"
+            "artıları", "eksileri", "pro", "con", "vs", "hangisi daha iyi"
         ]):
             return "MultiChainComparison", "Karşılaştırma/eleştiri kalıbı tespit edildi."
-        if any(k in p for k in ["hesapla", "calculate", "kod yaz", "write code"]):
-            return "ProgramOfThought", "Hesaplama/kod kalıbı tespit edildi."
-        if any(k in p for k in ["güncel", "haber", "latest", "news"]):
-            return "ReAct", "Güncel bilgi kalıbı tespit edildi."
         
+        # Code/math
+        if any(k in p for k in ["hesapla", "calculate", "kod yaz", "write code", "matematik", "formül"]):
+            return "ProgramOfThought", "Hesaplama/kod kalıbı tespit edildi."
+        
+        # Simple factual questions
+        factual_keywords = ["kimdir", "nedir", "ne zaman", "nerede", "başkenti", "anlamı"]
+        if any(k in p for k in factual_keywords) and len(prompt.split()) < 10:
+            return "Predict", "Basit olgusal soru tespit edildi."
+        
+        # Explanation requests
+        if any(k in p for k in ["neden", "nasıl", "açıkla", "anlat", "adım adım", "nasıl çalışır"]):
+            return "ChainOfThought", "Açıklama kalıbı tespit edildi."
+        
+        # Current/recent information
+        if any(k in p for k in ["güncel", "haber", "latest", "news", "son durum", "bugün"]):
+            return "ReAct", "Güncel bilgi kalıbı tespit edildi."
+
+        # Default based on complexity
         if "?" in (prompt or "") or len((prompt or "").split()) > 8:
             return "ChainOfThought", "Karmaşık soru yapısı tespit edildi."
         return "Predict", "Kısa ve basit ifade."
